@@ -114,6 +114,7 @@ struct headset_info_packet
 	bool eye_gaze;
 	bool face_tracking2_fb;
 	bool palm_pose;
+	bool passthrough;
 	std::vector<video_codec> supported_codecs; // from preferred to least preferred
 };
 
@@ -232,7 +233,7 @@ struct timesync_response
 struct feedback
 {
 	uint64_t frame_index;
-	uint8_t stream_index;
+	uint8_t stream_index; // 0-127 for yuv, 128-255 for alpha
 
 	// Timestamps
 	XrTime received_first_packet;
@@ -322,6 +323,7 @@ public:
 		end_of_frame = 1 << 2,
 	};
 	// Identifier of stream in video_stream_description
+	// elements > 127 are for alpha
 	uint8_t stream_item_idx;
 	// Counter increased for each frame
 	uint64_t frame_idx;
@@ -338,6 +340,8 @@ public:
 		std::array<XrPosef, 2> pose;
 		std::array<XrFovf, 2> fov;
 		std::array<foveation_parameter, 2> foveation;
+		// True when the frame contains an alpha channel
+		bool alpha;
 	};
 	std::optional<view_info_t> view_info;
 

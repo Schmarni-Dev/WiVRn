@@ -102,7 +102,7 @@ static void check_scale(std::string_view encoder_name, video_codec codec, uint16
 #if WIVRN_USE_NVENC
 	if (encoder_name == encoder_nvenc)
 	{
-		auto max = VideoEncoderNvenc::get_max_size(codec);
+		auto max = video_encoder_nvenc::get_max_size(codec);
 		if (width * scale[0] > max[0])
 		{
 			scale[0] = double(max[0] - 1) / width;
@@ -135,7 +135,7 @@ static constexpr auto ffmpeg_version()
 
 static std::optional<wivrn::video_codec> filter_codecs_vaapi(wivrn_vk_bundle & bundle, const std::vector<wivrn::video_codec> & codecs)
 {
-	VideoEncoderFFMPEG::mute_logs mute;
+	video_encoder_ffmpeg::mute_logs mute;
 	encoder_settings s{
 	        {
 	                .width = 800,
@@ -159,7 +159,7 @@ static std::optional<wivrn::video_codec> filter_codecs_vaapi(wivrn_vk_bundle & b
 		try
 		{
 			s.codec = codec;
-			video_encoder_va test(bundle, s, 60);
+			video_encoder_va test(bundle, s, 60, 0, 0);
 			return codec;
 		}
 		catch (...)
