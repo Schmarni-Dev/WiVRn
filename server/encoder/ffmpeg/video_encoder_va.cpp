@@ -131,7 +131,12 @@ vk::Format drm_to_vulkan_fmt(uint32_t drm_fourcc)
 
 } // namespace
 
-video_encoder_va::video_encoder_va(wivrn_vk_bundle & vk, wivrn::encoder_settings & settings, float fps) :
+video_encoder_va::video_encoder_va(wivrn_vk_bundle & vk,
+                                   wivrn::encoder_settings & settings,
+                                   float fps,
+                                   uint8_t stream_idx,
+                                   uint8_t image_layer) :
+        video_encoder_ffmpeg(stream_idx, image_layer),
         synchronization2(vk.vk.features.synchronization_2)
 {
 	auto drm_hw_ctx = make_drm_hw_ctx(vk.physical_device, settings.device);
@@ -377,7 +382,7 @@ void video_encoder_va::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer &
 	                .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
 	                                     .baseMipLevel = 0,
 	                                     .levelCount = 1,
-	                                     .baseArrayLayer = 0,
+	                                     .baseArrayLayer = image_layer,
 	                                     .layerCount = 1},
 	        },
 	        vk::ImageMemoryBarrier{
@@ -389,7 +394,7 @@ void video_encoder_va::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer &
 	                .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
 	                                     .baseMipLevel = 0,
 	                                     .levelCount = 1,
-	                                     .baseArrayLayer = 0,
+	                                     .baseArrayLayer = image_layer,
 	                                     .layerCount = 1},
 	        },
 	};
@@ -409,6 +414,7 @@ void video_encoder_va::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer &
 	        vk::ImageCopy{
 	                .srcSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane0,
+	                        .baseArrayLayer = image_layer,
 	                        .layerCount = 1,
 	                },
 	                .srcOffset = {
@@ -433,6 +439,7 @@ void video_encoder_va::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer &
 	        vk::ImageCopy{
 	                .srcSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane1,
+	                        .baseArrayLayer = image_layer,
 	                        .layerCount = 1,
 	                },
 	                .srcOffset = {

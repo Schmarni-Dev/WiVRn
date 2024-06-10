@@ -27,6 +27,7 @@
 #include "wifi_lock.h"
 #include "wivrn_client.h"
 #include "wivrn_packets.h"
+#include "xr/passthrough.h"
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -59,6 +60,7 @@ private:
 		vk::raii::Pipeline blit_pipeline = nullptr;
 		// latest frames from oldest to most recent
 		std::array<std::shared_ptr<wivrn::shard_accumulator::blit_handle>, image_buffer_size> latest_frames;
+		bool alpha;
 
 		std::shared_ptr<wivrn::shard_accumulator::blit_handle> frame(std::optional<uint64_t> id) const;
 		std::vector<uint64_t> frames() const;
@@ -98,6 +100,8 @@ private:
 	std::array<renderpass_output, view_count> decoder_output{};
 
 	std::optional<stream_reprojection> reprojector;
+
+	std::optional<xr::passthrough> passthrough;
 
 	vk::raii::Fence fence = nullptr;
 	vk::raii::CommandBuffer command_buffer = nullptr;

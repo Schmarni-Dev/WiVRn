@@ -16,6 +16,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#include "utils/overloaded.h"
 #define GLM_FORCE_RADIANS
 
 #include "stream.h"
@@ -127,6 +128,7 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 	info.eye_gaze = config.check_feature(feature::eye_gaze);
 	info.face_tracking2_fb = config.check_feature(feature::face_tracking);
 	info.palm_pose = application::space(xr::spaces::palm_left) or application::space(xr::spaces::palm_right);
+	info.passthrough = self->system.passthrough_supported() != xr::system::passthrough_type::no_passthrough;
 
 	audio::get_audio_description(info);
 	if (not(config.check_feature(feature::microphone)))
@@ -259,7 +261,8 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 	{
 		std::shared_lock lock(decoder_mutex);
 		std::unique_lock frame_lock(frames_mutex);
-		const auto stream = handle->feedback.stream_index;
+		auto stream = handle->feedback.stream_index;
+		stream = (2 * stream % 128) + stream / 128;
 		if (stream < decoders.size())
 		{
 			assert(decoder == decoders[stream].decoder.get());
@@ -267,8 +270,8 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 			std::swap(handle, decoders[stream].latest_frames[handle->feedback.frame_index % decoders[stream].latest_frames.size()]);
 		}
 
-		if (state_ != state::streaming && std::all_of(decoders.begin(), decoders.end(), [](accumulator_images & i) {
-			    return i.latest_frames.back();
+		if (state_ != state::streaming and std::ranges::all_of(decoders, [](accumulator_images & i) {
+			    return i.alpha or not i.frames().empty();
 		    }))
 		{
 			state_ = state::streaming;
@@ -302,6 +305,9 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 	common_frames.clear();
 	for (size_t i = 0; i < decoders.size(); ++i)
 	{
+		// Don't consider alpha channel
+		if (decoders[i].alpha)
+			continue;
 		if (i == 0)
 		{
 			for (const auto & h: decoders[i].latest_frames)
@@ -356,8 +362,17 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 	}
 	std::vector<std::shared_ptr<shard_accumulator::blit_handle>> result;
 	result.reserve(decoders.size());
+	bool alpha = false;
 	for (const auto & decoder: decoders)
-		result.push_back(decoder.frame(frame_index));
+	{
+		if (alpha or not decoder.alpha)
+		{
+			const auto & bh = result.emplace_back(decoder.frame(frame_index));
+			alpha |= bh and bh->view_info.alpha;
+		}
+		else
+			result.emplace_back(nullptr);
+	}
 	return result;
 }
 
@@ -461,15 +476,25 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			vert_specialization_info.setMapEntries(specialization_constants_desc);
 			vert_specialization_info.setData<float>(useful_size);
 
-			VkBool32 do_srgb = need_srgb_conversion(guess_model());
-			vk::SpecializationMapEntry frag_specialization_constant_desc{
-			        .constantID = 0,
-			        .offset = 0,
-			        .size = sizeof(do_srgb),
+			std::array<VkBool32, 2> constants = {
+			        need_srgb_conversion(guess_model()),
+			        i.alpha,
+			};
+			std::array frag_specialization_constant_desc = {
+			        vk::SpecializationMapEntry{
+			                .constantID = 0,
+			                .offset = 0,
+			                .size = sizeof(constants[0]),
+			        },
+			        vk::SpecializationMapEntry{
+			                .constantID = 1,
+			                .offset = sizeof(constants[0]),
+			                .size = sizeof(constants[1]),
+			        },
 			};
 			vk::SpecializationInfo frag_specialization_info;
 			frag_specialization_info.setMapEntries(frag_specialization_constant_desc);
-			frag_specialization_info.setData<VkBool32>(do_srgb);
+			frag_specialization_info.setData<VkBool32>(constants);
 
 			// Create graphics pipeline
 			vk::raii::ShaderModule vertex_shader = load_shader(device, "stream.vert");
@@ -507,7 +532,9 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			        .MultisampleState = {{
 			                .rasterizationSamples = vk::SampleCountFlagBits::e1,
 			        }},
-			        .ColorBlendAttachments = {{.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB}},
+			        .ColorBlendAttachments = {
+			                {.colorWriteMask = i.alpha ? vk::ColorComponentFlagBits::eA
+			                                           : vk::ColorComponentFlagBits::eA | vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB}},
 			        .DynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor},
 			        .layout = *i.blit_pipeline_layout,
 			        .renderPass = *blit_render_pass,
@@ -562,68 +589,67 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	command_buffer.begin(begin_info);
 
 	// Keep a reference to the resources needed to blit the images until vkWaitForFences
-	std::vector<std::shared_ptr<shard_accumulator::blit_handle>> blit_handles;
 
 	command_buffer.resetQueryPool(*query_pool, 0, size_gpu_timestamps);
 	command_buffer.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, *query_pool, 0);
 
+	// Search for frame with desired display time on all decoders
+	// If no such frame exists, use the latest frame for each decoder
+	current_blit_handles = common_frame(frame_state.predictedDisplayTime);
 	std::array<XrPosef, 2> pose{};
 	std::array<XrFovf, 2> fov{};
 	std::array<wivrn::to_headset::foveation_parameter, 2> foveation{};
+	bool use_alpha = false;
+
+	// Blit images from the decoders
+	for (auto [i, blit_handle]: std::views::zip(decoders, current_blit_handles))
 	{
-		// Search for frame with desired display time on all decoders
-		// If no such frame exists, use the latest frame for each decoder
-		blit_handles = common_frame(frame_state.predictedDisplayTime);
+		if (not blit_handle)
+			continue;
 
-		// Blit images from the decoders
-		for (auto [i, blit_handle]: std::views::zip(decoders, blit_handles))
+		blit_handle->feedback.blitted = application::now();
+		if (blit_handle->feedback.blitted - blit_handle->feedback.received_from_decoder > 1'000'000'000)
+			state_ = stream::state::stalled;
+		++blit_handle->feedback.times_displayed;
+		blit_handle->feedback.displayed = frame_state.predictedDisplayTime;
+
+		pose = blit_handle->view_info.pose;
+		fov = blit_handle->view_info.fov;
+		foveation = blit_handle->view_info.foveation;
+		use_alpha = blit_handle->view_info.alpha;
+
+		vk::DescriptorImageInfo image_info{
+		        .imageView = *blit_handle->image_view,
+		        .imageLayout = vk::ImageLayout::eGeneral,
+		};
+
+		vk::WriteDescriptorSet descriptor_write{
+		        .dstSet = i.descriptor_set,
+		        .dstBinding = 0,
+		        .dstArrayElement = 0,
+		        .descriptorCount = 1,
+		        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+		        .pImageInfo = &image_info,
+		};
+
+		device.updateDescriptorSets(descriptor_write, {});
+		if (*blit_handle->current_layout != vk::ImageLayout::eGeneral)
 		{
-			if (not blit_handle)
-				continue;
-
-			blit_handle->feedback.blitted = application::now();
-			if (blit_handle->feedback.blitted - blit_handle->feedback.received_from_decoder > 1'000'000'000)
-				state_ = stream::state::stalled;
-			++blit_handle->feedback.times_displayed;
-			blit_handle->feedback.displayed = frame_state.predictedDisplayTime;
-
-			pose = blit_handle->view_info.pose;
-			fov = blit_handle->view_info.fov;
-			foveation = blit_handle->view_info.foveation;
-
-			vk::DescriptorImageInfo image_info{
-			        .imageView = *blit_handle->image_view,
-			        .imageLayout = vk::ImageLayout::eGeneral,
+			vk::ImageMemoryBarrier barrier{
+			        .srcAccessMask = vk::AccessFlagBits::eNone,
+			        .dstAccessMask = vk::AccessFlagBits::eMemoryRead,
+			        .oldLayout = *blit_handle->current_layout,
+			        .newLayout = vk::ImageLayout::eGeneral,
+			        .image = blit_handle->image,
+			        .subresourceRange = {
+			                .aspectMask = vk::ImageAspectFlagBits::eColor,
+			                .levelCount = 1,
+			                .layerCount = 1,
+			        },
 			};
 
-			vk::WriteDescriptorSet descriptor_write{
-			        .dstSet = i.descriptor_set,
-			        .dstBinding = 0,
-			        .dstArrayElement = 0,
-			        .descriptorCount = 1,
-			        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-			        .pImageInfo = &image_info,
-			};
-
-			device.updateDescriptorSets(descriptor_write, {});
-			if (*blit_handle->current_layout != vk::ImageLayout::eGeneral)
-			{
-				vk::ImageMemoryBarrier barrier{
-				        .srcAccessMask = vk::AccessFlagBits::eNone,
-				        .dstAccessMask = vk::AccessFlagBits::eMemoryRead,
-				        .oldLayout = *blit_handle->current_layout,
-				        .newLayout = vk::ImageLayout::eGeneral,
-				        .image = blit_handle->image,
-				        .subresourceRange = {
-				                .aspectMask = vk::ImageAspectFlagBits::eColor,
-				                .levelCount = 1,
-				                .layerCount = 1,
-				        },
-				};
-
-				command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, barrier);
-				*blit_handle->current_layout = vk::ImageLayout::eGeneral;
-			}
+			command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands, {}, {}, {}, barrier);
+			*blit_handle->current_layout = vk::ImageLayout::eGeneral;
 		}
 	}
 
@@ -645,6 +671,8 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		for (const auto & decoder: decoders)
 		{
 			if (not *decoder.blit_pipeline)
+				continue;
+			if (decoder.alpha and not use_alpha)
 				continue;
 
 			command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *decoder.blit_pipeline);
@@ -706,8 +734,26 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	submit_info.setCommandBuffers(*command_buffer);
 	queue.submit(submit_info, *fence);
 
+	XrEnvironmentBlendMode blend_mode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 	std::vector<XrCompositionLayerBaseHeader *> layers_base;
 	std::vector<XrCompositionLayerProjectionView> layer_view(view_count);
+
+	if (use_alpha)
+	{
+		session.enable_passthrough(system);
+		std::visit(
+		        utils::overloaded{
+		                [&](std::monostate &) {
+			                assert(false);
+		                },
+		                [&](xr::passthrough_alpha_blend & p) {
+			                blend_mode = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+		                },
+		                [&](auto & p) {
+			                layers_base.push_back(p.layer());
+		                }},
+		        session.get_passthrough());
+	}
 
 	for (size_t swapchain_index = 0; swapchain_index < view_count; swapchain_index++)
 	{
@@ -734,7 +780,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 
 	XrCompositionLayerProjection layer{
 	        .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
-	        .layerFlags = 0,
+	        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
 	        .space = application::space(xr::spaces::world),
 	        .viewCount = (uint32_t)layer_view.size(),
 	        .views = layer_view.data(),
@@ -743,7 +789,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	std::vector<XrCompositionLayerQuad> imgui_layers;
 	if (imgui_ctx and plots_visible)
 	{
-		accumulate_metrics(frame_state.predictedDisplayTime, blit_handles, timestamps);
+		accumulate_metrics(frame_state.predictedDisplayTime, current_blit_handles, timestamps);
 		imgui_layers = plot_performance_metrics(frame_state.predictedDisplayTime);
 	}
 
@@ -757,7 +803,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 
 	try
 	{
-		session.end_frame(frame_state.predictedDisplayTime, layers_base);
+		session.end_frame(frame_state.predictedDisplayTime, layers_base, blend_mode);
 	}
 	catch (std::system_error & e)
 	{
@@ -770,8 +816,8 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	// Network operations may be blocking, do them once everything was submitted
 	{
 		std::vector<serialization_packet> packets;
-		packets.reserve(blit_handles.size());
-		for (const auto & handle: blit_handles)
+		packets.reserve(current_blit_handles.size());
+		for (const auto & handle: current_blit_handles)
 		{
 			if (handle)
 			{
@@ -925,12 +971,12 @@ void scenes::stream::setup(const to_headset::video_stream_description & descript
 	{
 		vk::DescriptorPoolSize pool_size{
 		        .type = vk::DescriptorType::eCombinedImageSampler,
-		        .descriptorCount = uint32_t(description.items.size()),
+		        .descriptorCount = uint32_t(2 * description.items.size()),
 		};
 		blit_descriptor_pool = vk::raii::DescriptorPool(
 		        device,
 		        vk::DescriptorPoolCreateInfo{
-		                .maxSets = uint32_t(description.items.size()),
+		                .maxSets = uint32_t(2 * description.items.size()),
 		                .poolSizeCount = 1,
 		                .pPoolSizes = &pool_size,
 		        });
@@ -952,10 +998,14 @@ void scenes::stream::setup(const to_headset::video_stream_description & descript
 			}
 		}
 
-		accumulator_images dec;
-		dec.decoder = std::make_unique<shard_accumulator>(device, physical_device, item, description.fps, shared_from_this(), stream_index);
-
-		decoders.push_back(std::move(dec));
+		decoders.push_back(accumulator_images{
+		        .decoder = std::make_unique<shard_accumulator>(device, physical_device, item, description.fps, shared_from_this(), stream_index),
+		        .alpha = false,
+		});
+		decoders.push_back(accumulator_images{
+		        .decoder = std::make_unique<shard_accumulator>(device, physical_device, item, description.fps, shared_from_this(), stream_index + 128),
+		        .alpha = true,
+		});
 	}
 }
 
