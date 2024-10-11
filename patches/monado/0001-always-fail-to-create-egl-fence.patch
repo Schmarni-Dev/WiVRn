@@ -1,0 +1,25 @@
+From bafc21fe1f1f0768a3849d1f9b8c766d1e34086f Mon Sep 17 00:00:00 2001
+From: Schmarni <marnistromer@gmail.com>
+Date: Tue, 1 Oct 2024 20:06:40 +0200
+Subject: [PATCH] always fail to create egl fence
+
+Signed-off-by: Schmarni <marnistromer@gmail.com>
+---
+ src/xrt/compositor/client/comp_egl_client.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/xrt/compositor/client/comp_egl_client.c b/src/xrt/compositor/client/comp_egl_client.c
+index 45b7d4e85..c2cf7ef6e 100644
+--- a/src/xrt/compositor/client/comp_egl_client.c
++++ b/src/xrt/compositor/client/comp_egl_client.c
+@@ -389,6 +389,7 @@ client_egl_insert_fence(struct xrt_compositor *xc, xrt_graphics_sync_handle_t *o
+ 	*out_handle = XRT_GRAPHICS_SYNC_HANDLE_INVALID;
+ 	EGLDisplay dpy = ceglc->current.dpy;
+ 
++	return XRT_ERROR_FENCE_CREATE_FAILED;
+ #ifdef XRT_GRAPHICS_SYNC_HANDLE_IS_FD
+ 
+ 	EGLSyncKHR sync = eglCreateSyncKHR(dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
+-- 
+2.46.2
+
