@@ -35,7 +35,7 @@ BOOSTPFR_SHA256=$(curl --silent --location $BOOSTPFR_URL | sha256sum | cut -f1 -
 if [ $WIVRN_SRC_TYPE = git ]
 then
     WIVRN_SRC1="type: git"
-    WIVRN_SRC2="url: https://github.com/WiVRn/WiVRn.git"
+    WIVRN_SRC2="url: https://github.com/Schmarni-Dev/WiVRn.git"
     WIVRN_SRC3="tag: ${GIT_COMMIT}"
 elif [ $WIVRN_SRC_TYPE = gitlocal ]
 then
