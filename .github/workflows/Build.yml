@@ -349,26 +349,3 @@ jobs:
         cd wivrn
         git fetch origin release
         git push origin HEAD:release
-
-  sync_fork_downstream:
-    name: Sync fork downstream
-    runs-on: ubuntu-latest
-    needs: [build-server, build-android]
-    if: ${{ vars.APK_ONLY == '' }} && github.branch == 'master'
-    steps:
-      - name: Check for DOWNSTREAM_GITHUB_TOKEN
-        id: downstream-secret-check
-        shell: bash
-        run: |
-          if [[ "${{ secrets.DOWNSTREAM_GITHUB_TOKEN }}" != '' ]]; then
-            echo "available=true" >> $GITHUB_OUTPUT;
-          else
-            echo "available=false" >> $GITHUB_OUTPUT;
-          fi
-      - name: Sync fork downstream
-        if: ${{ steps.downstream-secret-check.outputs.available == 'true' }}
-        run: |
-          curl -X POST -H "Accept: application/vnd.github.v3+json" \
-               -H "Authorization: token ${{ secrets.DOWNSTREAM_GITHUB_TOKEN }}" \
-               https://api.github.com/repos/WiVRn/WiVRn-APK/merge-upstream \
-               -d '{"branch":"master"}'
