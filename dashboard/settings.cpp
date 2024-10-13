@@ -134,47 +134,9 @@ settings::settings(wivrn_server * server_interface) :
 	connect(ui->encoder, &QComboBox::currentIndexChanged, this, &settings::on_selected_encoder_changed);
 	connect(ui->encoder, &QComboBox::currentIndexChanged, this, &settings::on_encoder_settings_changed);
 	connect(ui->codec, &QComboBox::currentIndexChanged, this, &settings::on_encoder_settings_changed);
-	connect(ui->bitrate, &QDoubleSpinBox::valueChanged, this, &settings::on_encoder_settings_changed);
-	connect(ui->slider_foveation, &QSlider::valueChanged, this, &settings::on_encoder_settings_changed);
-	connect(ui->spin_foveation, &QSpinBox::valueChanged, this, &settings::on_encoder_settings_changed);
-
-	// connect(ui->foveation_info, &QPushButton::clicked, this, [&]() { QToolTip::showText(ui->radio_manual_foveation->pos(), ui->radio_manual_foveation->toolTip(), ui->radio_manual_foveation); });
 
 	connect(this, &QDialog::accepted, this, &settings::save_settings);
 	connect(ui->buttonBox->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, &settings::restore_defaults);
-
-	ui->partitionner->set_paint([&](QPainter & painter, QRect rect, const QVariant & data, int index, bool selected) {
-		if (selected)
-		{
-			painter.fillRect(rect.adjusted(1, 1, 0, 0), QColorConstants::Cyan);
-		}
-
-		auto [encoder_id, codec_id] = data.value<std::pair<int, int>>();
-
-		QString codec = ui->codec->itemText(codec_id);
-		QString encoder = ui->encoder->itemText(encoder_id);
-
-		QFont font = painter.font();
-		QFont font2 = font;
-
-		font2.setPixelSize(24);
-
-		QString text = QString("%1\n%2").arg(encoder, codec);
-
-		QFontMetrics metrics{font2};
-		QSize size = metrics.size(0, text);
-
-		if (double ratio = std::max((double)size.width() / rect.width(), (double)size.height() / rect.height()); ratio > 1)
-		{
-			int pixel_size = font2.pixelSize() / ratio;
-			if (pixel_size > 0)
-				font2.setPixelSize(pixel_size);
-		}
-
-		painter.setFont(font2);
-		painter.drawText(rect, Qt::AlignCenter, text);
-		painter.setFont(font);
-	});
 
 	setWindowModality(Qt::WindowModality::ApplicationModal);
 
@@ -212,6 +174,9 @@ void settings::on_selected_encoder_changed()
 
 void settings::on_encoder_settings_changed()
 {
+	if (ui->partitionner->selected_index() < 0)
+		return;
+
 	QString status;
 
 	int encoder = ui->encoder->currentIndex();
@@ -292,10 +257,22 @@ void settings::on_browse_game()
 
 void settings::selected_rectangle_changed(int index)
 {
-	auto [encoder, codec] = ui->partitionner->rectangles_data(index).value<std::pair<int, int>>();
+	if (index >= 0)
+	{
+		auto [encoder, codec] = ui->partitionner->rectangles_data(index).value<std::pair<int, int>>();
 
-	ui->encoder->setCurrentIndex(encoder);
-	ui->codec->setCurrentIndex(codec);
+		ui->encoder->setCurrentIndex(encoder);
+		ui->codec->setCurrentIndex(codec);
+		ui->encoder->setEnabled(true);
+		ui->codec->setEnabled(true);
+	}
+	else
+	{
+		ui->encoder->setCurrentIndex(-1);
+		ui->codec->setCurrentIndex(-1);
+		ui->encoder->setEnabled(false);
+		ui->codec->setEnabled(false);
+	}
 }
 
 void settings::restore_defaults()
@@ -313,7 +290,7 @@ void settings::restore_defaults()
 
 	ui->partitionner->set_rectangles(rectangles);
 	ui->partitionner->set_rectangles_data(encoder_config);
-	ui->partitionner->set_selected_index(0);
+	ui->partitionner->set_selected_index(-1);
 
 	ui->combo_select_game->setCurrentIndex(0);
 	ui->edit_game_path->setText("");
@@ -406,7 +383,7 @@ void settings::load_settings()
 
 	ui->partitionner->set_rectangles(rectangles);
 	ui->partitionner->set_rectangles_data(encoder_config);
-	ui->partitionner->set_selected_index(0);
+	ui->partitionner->set_selected_index(-1);
 
 	// Foveation
 	try
@@ -464,9 +441,11 @@ void settings::load_settings()
 	selected_rectangle_changed(0);
 
 	ui->partitionner->set_paint([&](QPainter & painter, QRect rect, const QVariant & data, int index, bool selected) {
+		QPalette palette = QApplication::palette();
+
 		if (selected)
 		{
-			painter.fillRect(rect.adjusted(1, 1, 0, 0), QColorConstants::Cyan);
+			painter.fillRect(rect.adjusted(1, 1, 0, 0), palette.color(QPalette::Highlight));
 		}
 
 		auto [encoder_id, codec_id] = data.value<std::pair<int, int>>();
