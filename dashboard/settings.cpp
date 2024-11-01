@@ -46,6 +46,7 @@ const std::vector<std::pair<int, std::string>> encoder_ids{
         {1, "nvenc"},
         {2, "vaapi"},
         {3, "x264"},
+        {4, "vulkan"},
 };
 
 const std::vector<std::pair<int, std::string>> codec_ids{
@@ -73,6 +74,9 @@ const std::vector<std::pair<int, int>> compatible_combos{
         {2, 3},
         // x264
         {3, 1},
+        // vulkan
+        {4, 1},
+        // {4, 2},
 };
 
 int encoder_id_from_string(std::string_view s)
@@ -264,6 +268,11 @@ void settings::on_encoder_settings_changed()
 	if (codec == 3 /* av1 */)
 	{
 		status += tr("Not all headsets and GPUs support AV1\n");
+	}
+
+	if (encoder == 4 /* vulkan */)
+	{
+		status += tr("Vulkan Video encoder is experimental\n");
 	}
 
 	ui->partitionner->set_rectangles_data(ui->partitionner->selected_index(), QVariant::fromValue(std::pair(encoder, codec)));

@@ -113,7 +113,7 @@ struct scene_data
 
 		std::string name;
 		std::string shader_name = "lit";
-		bool blend_enable = false;
+		bool blend_enable = true;
 	};
 
 	struct vertex
@@ -174,6 +174,8 @@ struct scene_data
 
 		std::string name;
 		bool visible;
+
+		std::array<glm::vec4, 4> clipping_planes;
 
 		uint32_t layer_mask = 1;
 
@@ -278,6 +280,13 @@ public:
 		assert(id < scene->scene_nodes.size());
 
 		return {scene->scene_nodes[id].parent_id, scene};
+	}
+
+	std::vector<node_handle> children()
+	{
+		assert(scene != nullptr);
+
+		return scene->find_children(*this);
 	}
 
 	operator bool() const

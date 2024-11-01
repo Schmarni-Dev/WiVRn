@@ -20,8 +20,11 @@
 
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <magic_enum_containers.hpp>
 #include <render/scene_data.h>
+#include <span>
 #include <variant>
+#include <xr/space.h>
 #include <openxr/openxr.h>
 
 struct input_profile
@@ -58,10 +61,15 @@ struct input_profile
 	std::string id;
 
 	std::vector<visual_response> responses;
-	std::vector<std::pair<XrSpace, node_handle>> model_handles;
+	std::vector<std::pair<xr::spaces, node_handle>> model_handles;
 
-	input_profile(const std::filesystem::path & json_profile, scene_loader & loader, scene_data & scene);
+	node_handle left_ray;
+	node_handle right_ray;
+
+	magic_enum::containers::array<xr::spaces, std::pair<glm::vec3, glm::quat>> offset;
+
+	input_profile(const std::filesystem::path & json_profile, scene_loader & loader, scene_data & scene_controllers, scene_data & scene_rays);
 
 	// application::poll_actions() must have been called before
-	void apply(XrSpace world_space, XrTime predicted_display_time, bool hide_left, bool hide_right);
+	void apply(XrSpace world_space, XrTime predicted_display_time, bool hide_left, bool hide_right, std::span<glm::vec4> pointer_limits);
 };

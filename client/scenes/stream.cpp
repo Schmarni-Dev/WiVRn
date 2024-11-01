@@ -98,7 +98,7 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 
 	assert(views.size() == info.fov.size());
 
-	for (auto [i, j]: utils::zip(views, info.fov))
+	for (auto [i, j]: std::views::zip(views, info.fov))
 	{
 		j = i.fov;
 	}
@@ -206,16 +206,23 @@ void scenes::stream::on_focused()
 		        1500,
 		        1000);
 
+		imgui_context::viewport vp{
+		        .space = xr::spaces::view,
+		        .position = {0, 0, -1},
+		        .orientation = {1, 0, 0, 0},
+		        .size = {1.0, 0.6666},
+		        .vp_origin = {0, 0},
+		        .vp_size = {1500, 1000},
+		};
+
 		imgui_ctx.emplace(physical_device,
 		                  device,
 		                  queue_family_index,
 		                  queue,
-		                  application::space(xr::spaces::view),
 		                  std::span<imgui_context::controller>{},
 		                  swapchain_imgui,
-		                  glm::vec2{1.0, 0.6666});
+		                  std::vector{vp});
 
-		imgui_ctx->set_position({0, 0, -1}, {1, 0, 0, 0});
 		plots_toggle_1 = get_action("plots_toggle_1").first;
 		plots_toggle_2 = get_action("plots_toggle_2").first;
 	}
@@ -476,7 +483,6 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			i.blit_pipeline_layout = vk::raii::PipelineLayout(device, pipeline_layout_info);
 
 			vk::pipeline_builder pipeline_info{
-			        .flags = {},
 			        .Stages = {{
 			                           .stage = vk::ShaderStageFlagBits::eVertex,
 			                           .module = *vertex_shader,
@@ -489,15 +495,11 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			                           .pName = "main",
 			                           .pSpecializationInfo = &frag_specialization_info,
 			                   }},
-			        .VertexInputState = {.flags = {}},
 			        .VertexBindingDescriptions = {},
 			        .VertexAttributeDescriptions = {},
 			        .InputAssemblyState = {{
 			                .topology = vk::PrimitiveTopology::eTriangleStrip,
 			        }},
-			        .ViewportState = {.flags = {}},
-			        .Viewports = {{}},
-			        .Scissors = {{}},
 			        .RasterizationState = {{
 			                .polygonMode = vk::PolygonMode::eFill,
 			                .lineWidth = 1,
@@ -505,9 +507,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			        .MultisampleState = {{
 			                .rasterizationSamples = vk::SampleCountFlagBits::e1,
 			        }},
-			        .ColorBlendState = {.flags = {}},
 			        .ColorBlendAttachments = {{.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB}},
-			        .DynamicState = {.flags = {}},
 			        .DynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor},
 			        .layout = *i.blit_pipeline_layout,
 			        .renderPass = *blit_render_pass,
@@ -576,7 +576,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		blit_handles = common_frame(frame_state.predictedDisplayTime);
 
 		// Blit images from the decoders
-		for (auto [i, blit_handle]: utils::zip(decoders, blit_handles))
+		for (auto [i, blit_handle]: std::views::zip(decoders, blit_handles))
 		{
 			if (not blit_handle)
 				continue;
@@ -740,17 +740,20 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	        .views = layer_view.data(),
 	};
 
-	XrCompositionLayerQuad imgui_layer;
+	std::vector<XrCompositionLayerQuad> imgui_layers;
 	if (imgui_ctx and plots_visible)
 	{
 		accumulate_metrics(frame_state.predictedDisplayTime, blit_handles, timestamps);
-		imgui_layer = plot_performance_metrics(frame_state.predictedDisplayTime);
+		imgui_layers = plot_performance_metrics(frame_state.predictedDisplayTime);
 	}
 
 	layers_base.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&layer));
 
 	if (imgui_ctx and plots_visible)
-		layers_base.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&imgui_layer));
+	{
+		for (auto & layer: imgui_layers)
+			layers_base.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&layer));
+	}
 
 	try
 	{

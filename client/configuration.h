@@ -50,6 +50,8 @@ public:
 	bool show_performance_metrics = false;
 	bool passthrough_enabled = false;
 
+	std::string virtual_keyboard_layout = "QWERTY";
+
 	bool check_feature(feature f) const;
 	void set_feature(feature f, bool state);
 

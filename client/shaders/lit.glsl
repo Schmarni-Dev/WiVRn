@@ -20,10 +20,11 @@
 #version 450
 
 layout (constant_id = 0) const int nb_texcoords = 2;
-layout (constant_id = 1) const int nb_clipping = 1;
-layout (constant_id = 2) const bool dithering = true;
-layout (constant_id = 3) const bool alpha_cutout = false;
-layout (constant_id = 4) const bool skinning = false;
+layout (constant_id = 1) const bool dithering = true;
+layout (constant_id = 2) const bool alpha_cutout = false;
+layout (constant_id = 3) const bool skinning = false;
+
+const int nb_clipping = 4;
 
 const float fog_min_dist = 20.0;
 const float fog_max_dist = 35.0;
@@ -36,7 +37,6 @@ layout(set = 0, binding = 0) uniform scene_ssbo
 	vec4 light_position;
 	vec4 ambient_color;
 	vec4 light_color;
-// 	vec4 clipping_plane[8];
 } scene;
 
 layout(set = 0, binding = 1) uniform mesh_ssbo
@@ -44,6 +44,7 @@ layout(set = 0, binding = 1) uniform mesh_ssbo
 	mat4 model;
 	mat4 modelview;
 	mat4 modelviewproj;
+	vec4 clipping_plane[nb_clipping];
 } mesh;
 
 layout(set = 0, binding = 2) uniform joints_ssbo
@@ -105,12 +106,14 @@ layout(location = 0) out vec4 out_color;
 // Shader code
 #ifdef VERT_SHADER
 
-// out float gl_ClipDistance[8];
-// out float gl_CullDistance[8];
+out gl_PerVertex
+{
+	vec4 gl_Position;
+	float gl_ClipDistance[nb_clipping];
+};
 
 void main()
 {
-
 	for(int i = 0; i < nb_texcoords; i++)
 		texcoord[i] = in_texcoord[i];
 
@@ -133,11 +136,11 @@ void main()
 	frag_pos = mesh.modelview * vec4(in_position, 1.0);
 	light_pos = scene.view * scene.light_position;
 
-// 	for(int i = 0; i < nb_clipping; i++)
-// 	{
-// 		gl_ClipDistance[i] = dot(scene.clipping_plane[i], frag_pos);
-// 		gl_CullDistance[i] = dot(scene.clipping_plane[i], frag_pos);
-// 	}
+	for(int i = 0; i < nb_clipping; i++)
+	{
+		gl_ClipDistance[i] = dot(mesh.clipping_plane[i], mesh.model * vec4(in_position, 1.0));
+	}
+
 }
 
 #endif
@@ -171,13 +174,13 @@ void main()
 
 	vec3 light = ambient + diffuse /*+ specular*/;
 
-	vec4 c = texture(base_color, fract(texcoord[0])) * vec4(light, 1.0);
+	vec4 bc = material.base_color_factor * texture(base_color, fract(texcoord[0])) * vec4(light, 1.0);
+
+	vec4 ec = material.base_emissive_factor * texture(emissive, fract(texcoord[0]));
 
 	float fog = clamp((length(frag_pos) - fog_min_dist) / (fog_max_dist - fog_min_dist), 0.0, 1.0);
 
-	c = mix(c, fog_color, fog);
-
-// 	vec4 c = vec4(1,1,1,1);
+	bc = mix(bc + ec, fog_color, fog);
 
 // 	if (alpha_cutout && c.a <= 0.5)
 // 		discard;
@@ -187,12 +190,12 @@ void main()
 		ivec2 tmp = ivec2(gl_FragCoord.xy) % 4;
 		float dither_thd = dither_pattern[tmp.x][tmp.y];
 
-		vec4 color = c * 255.0f;
+		vec4 color = bc * 255.0f;
 
 		bvec4 tmp2 = greaterThan(fract(color), vec4(dither_thd, dither_thd, dither_thd, dither_thd));
 		out_color = (ceil(color) + vec4(tmp2)) / 255.0;
 	}
 	else
-		out_color = c;
+		out_color = bc;
 }
 #endif

@@ -18,6 +18,11 @@
  */
 #pragma once
 
+#include "xr/space.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <string>
+#include <utility>
 #include <openxr/openxr.h>
 
 enum class model
@@ -50,3 +55,7 @@ bool need_srgb_conversion(model);
 
 // Return nullptr if no permission is required
 const char * permission_name(feature f);
+
+std::string controller_name();
+std::string controller_ray_model_name();
+std::pair<glm::vec3, glm::quat> controller_offset(std::string_view profile, xr::spaces space);

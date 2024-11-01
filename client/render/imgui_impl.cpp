@@ -21,12 +21,14 @@
 
 #include "application.h"
 #include "asset.h"
+#include "constants.h"
 #include "image_loader.h"
 #include "openxr/openxr.h"
 #include "utils/ranges.h"
 #include "vulkan/vulkan_enums.hpp"
 #include "vulkan/vulkan_handles.hpp"
 #include "vulkan/vulkan_to_string.hpp"
+#include "xr/space.h"
 #include <algorithm>
 #include <backends/imgui_impl_vulkan.h>
 #include <boost/locale.hpp>
@@ -35,9 +37,9 @@
 #include <glm/gtc/matrix_access.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <locale>
-#include <mutex>
+#include <limits>
 #include <optional>
+#include <ranges>
 #include <spdlog/spdlog.h>
 #include <string_view>
 
@@ -119,38 +121,127 @@ static void check_vk_result(VkResult result)
 	}
 }
 
-std::optional<std::pair<ImVec2, float>> imgui_context::ray_plane_intersection(const imgui_context::controller_state & in) const
+static bool in_window(ImGuiWindow * window, ImVec2 position)
+{
+	if (window->Hidden or not window->Active)
+		return false;
+
+	if (window->Pos.x > position.x or
+	    window->Pos.y > position.y or
+	    window->Pos.x + window->Size.x < position.x or
+	    window->Pos.y + window->Size.y < position.y)
+		return false;
+
+	return true;
+}
+
+static bool in_viewport(const imgui_context::viewport & viewport, ImVec2 position)
+{
+	if (viewport.vp_origin.x > position.x or
+	    viewport.vp_origin.y > position.y or
+	    viewport.vp_origin.x + viewport.vp_size.x < position.x or
+	    viewport.vp_origin.y + viewport.vp_size.y < position.y)
+		return false;
+
+	return true;
+}
+
+static bool window_intersects_viewport(ImGuiWindow * window, imgui_context::viewport & viewport)
+{
+	ImRect w{window->Pos.x, window->Pos.y, window->Pos.x + window->Size.x, window->Pos.y + window->Size.y};
+	ImRect v(viewport.vp_origin.x, viewport.vp_origin.y, viewport.vp_origin.x + viewport.vp_size.x, viewport.vp_origin.y + viewport.vp_size.y);
+
+	return w.Overlaps(v);
+}
+
+static float distance_to_window(ImGuiWindow * window, ImVec2 position)
+{
+	if (window->Hidden or not window->Active)
+		return std::numeric_limits<float>::infinity();
+
+	float dx;
+	if (position.x < window->Pos.x)
+		dx = window->Pos.x - position.x;
+	else if (position.x > window->Pos.x + window->Size.x)
+		dx = position.x - (window->Pos.x + window->Size.x);
+	else
+		dx = 0;
+
+	float dy;
+	if (position.y < window->Pos.y)
+		dy = window->Pos.y - position.y;
+	else if (position.y > window->Pos.y + window->Size.y)
+		dy = position.y - (window->Pos.y + window->Size.y);
+	else
+		dy = 0;
+
+	return std::hypot(dx, dy);
+}
+
+std::vector<std::pair<ImVec2, float>> imgui_context::ray_plane_intersection(const imgui_context::controller_state & in) const
 {
 	if (!in.active)
 		return {};
 
-	auto M = glm::transpose(glm::mat3_cast(orientation_)); // world-to-plane transform
+	std::vector<std::pair<ImVec2, float>> intersections;
 
-	glm::vec3 controller_direction = glm::column(glm::mat3_cast(in.aim_orientation), 2);
-
-	// Compute all vectors in the reference frame of the GUI plane
-	glm::vec3 ray_start = M * (in.aim_position - position_);
-	glm::vec3 ray_dir = M * controller_direction;
-
-	if (ray_dir.z > 0.0001f)
+	for (const auto & i: layers_)
 	{
-		glm::vec2 coord;
+		if (i.space != xr::spaces::world)
+			continue;
 
-		// ray_start + lambda × ray_dir ∈ imgui plane
-		// => ray_start.z + lambda × ray_dir.z = 0
-		float lambda = -ray_start.z / ray_dir.z;
+		auto M = glm::transpose(glm::mat3_cast(i.orientation)); // world-to-plane transform
 
-		coord.x = ray_start.x + lambda * ray_dir.x;
-		coord.y = ray_start.y + lambda * ray_dir.y;
+		glm::quat q = (in.source == ImGuiMouseSource_VRHandTracking) ? i.orientation : in.aim_orientation;
+		glm::vec3 controller_direction = -glm::column(glm::mat3_cast(q), 2); // The aim direction is -Z
 
-		// Convert from mesh coordinates to imgui coordinates
-		coord = coord / scale_;
+		// Compute all vectors in the reference frame of the GUI plane
+		glm::vec3 ray_start = M * (in.aim_position - i.position);
+		glm::vec3 ray_dir = M * controller_direction;
 
-		if (fabs(coord.x) <= 0.5 && fabs(coord.y) <= 0.5)
-			return std::make_pair(ImVec2(
-			                              (0.5 + coord.x) * size.width,
-			                              (0.5 - coord.y) * size.height),
-			                      -lambda);
+		if (ray_dir.z < -0.0001f)
+		{
+			glm::vec2 coord;
+
+			// ray_start + distance × ray_dir ∈ imgui plane
+			// => ray_start.z + distance × ray_dir.z = 0
+			float distance = -ray_start.z / ray_dir.z;
+
+			if (distance < constants::gui::min_pointer_distance)
+				continue;
+
+			coord.x = ray_start.x + distance * ray_dir.x;
+			coord.y = ray_start.y + distance * ray_dir.y;
+
+			// Convert from mesh coordinates to imgui coordinates
+			coord = coord / i.size;
+
+			if (fabs(coord.x) > 0.5 or fabs(coord.y) > 0.5)
+				continue;
+
+			intersections.emplace_back(ImVec2(
+			                                   (0.5 + coord.x) * i.vp_size.x + i.vp_origin.x,
+			                                   (0.5 - coord.y) * i.vp_size.y + i.vp_origin.y),
+			                           distance);
+		}
+	}
+
+	std::ranges::sort(intersections, [](auto & a, auto & b) { return a.second < b.second; });
+
+	return intersections;
+}
+
+glm::vec3 imgui_context::rw_from_vp(const ImVec2 & position)
+{
+	for (auto & i: layers_)
+	{
+		if (not in_viewport(i, position))
+			continue;
+
+		return i.position + glm::mat3_cast(i.orientation) * glm::vec3{
+		                                                            ((position.x - i.vp_origin.x) / i.vp_size.x - 0.5) * i.size.x,
+		                                                            (-(position.y - i.vp_origin.y) / i.vp_size.y + 0.5) * i.size.y,
+		                                                            0};
 	}
 
 	return {};
@@ -202,7 +293,7 @@ static const std::array pool_sizes =
         {
                 vk::DescriptorPoolSize{
                         .type = vk::DescriptorType::eCombinedImageSampler,
-                        .descriptorCount = 100,
+                        .descriptorCount = constants::gui::nb_combined_image_samplers,
                 }};
 
 static const vk::DescriptorSetLayoutBinding layout_bindings{
@@ -211,7 +302,7 @@ static const vk::DescriptorSetLayoutBinding layout_bindings{
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eFragment};
 
-imgui_context::imgui_context(vk::raii::PhysicalDevice physical_device, vk::raii::Device & device, uint32_t queue_family_index, vk::raii::Queue & queue, XrSpace world, std::span<controller> controllers_, xr::swapchain & swapchain, glm::vec2 size) :
+imgui_context::imgui_context(vk::raii::PhysicalDevice physical_device, vk::raii::Device & device, uint32_t queue_family_index, vk::raii::Queue & queue, std::span<controller> controllers_, xr::swapchain & swapchain, std::vector<viewport> layers) :
         physical_device(physical_device),
         device(device),
         queue_family_index(queue_family_index),
@@ -233,12 +324,12 @@ imgui_context::imgui_context(vk::raii::PhysicalDevice physical_device, vk::raii:
         command_buffers(swapchain.images().size()),
         size(swapchain.extent().width, swapchain.extent().height),
         format(swapchain.format()),
-        scale_(size.x, size.y),
+        layers_(std::move(layers)),
         swapchain(swapchain),
         context(ImGui::CreateContext()),
         plot_context(ImPlot::CreateContext()),
         io((ImGui::SetCurrentContext(context), ImGui::GetIO())),
-        world(world)
+        world(application::space(xr::spaces::world))
 {
 	controllers.reserve(controllers_.size());
 	for (const auto & i: controllers_)
@@ -262,19 +353,20 @@ imgui_context::imgui_context(vk::raii::PhysicalDevice physical_device, vk::raii:
 	        .Device = *application::get_device(),
 	        .QueueFamily = application::queue_family_index(),
 	        .Queue = *application::get_queue(),
-	        .PipelineCache = *application::get_pipeline_cache(),
 	        .DescriptorPool = *descriptor_pool,
-	        .Subpass = 0,
+	        .RenderPass = *renderpass,
 	        .MinImageCount = 2,
 	        .ImageCount = (uint32_t)swapchain.images().size(), // used to cycle between VkBuffers in ImGui_ImplVulkan_RenderDrawData
 	        .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+	        .PipelineCache = *application::get_pipeline_cache(),
+	        .Subpass = 0,
 	        .Allocator = nullptr,
 	        .CheckVkResultFn = check_vk_result,
 	};
 
 	ImGui::SetCurrentContext(context);
 	ImPlot::SetCurrentContext(plot_context);
-	ImGui_ImplVulkan_Init(&init_info, *renderpass);
+	ImGui_ImplVulkan_Init(&init_info);
 
 	initialize_fonts();
 
@@ -286,6 +378,8 @@ imgui_context::imgui_context(vk::raii::PhysicalDevice physical_device, vk::raii:
 	ImGuiStyle & style = ImGui::GetStyle();
 
 	style.WindowBorderSize = 0;
+	style.DisabledAlpha = 0.2;
+	style.Colors[ImGuiCol_ModalWindowDimBg] = {0, 0, 0, 0};
 }
 
 void imgui_context::add_chars(std::string_view sv)
@@ -363,7 +457,7 @@ static std::vector<std::string> find_font(ImFontGlyphRangesBuilder glyph_range_b
 
 	static FcConfig * config = FcInitLoadConfigAndFonts();
 
-	FcPattern * pattern = FcNameParse((const FcChar8 *)"Noto Sans");
+	FcPattern * pattern = FcNameParse((const FcChar8 *)constants::gui::font_name);
 	if (!pattern)
 		throw std::runtime_error("Failed to create Fontconfig pattern");
 
@@ -494,15 +588,15 @@ void imgui_context::initialize_fonts()
 		for (auto & font: fonts)
 		{
 			spdlog::info("Using font {}", font, application::get_messages_info().language);
-			io.Fonts->AddFontFromFileTTF(font.c_str(), 30, &config, glyph_ranges.Data);
+			io.Fonts->AddFontFromFileTTF(font.c_str(), constants::gui::font_size_small, &config, glyph_ranges.Data);
 			config.MergeMode = true;
 		}
 
 		config.MergeMode = true;
 		config.GlyphMinAdvanceX = 40; // Use if you want to make the icon monospaced
 		static const ImWchar icon_ranges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
-		io.Fonts->AddFontFromMemoryTTF(const_cast<std::byte *>(font_awesome_regular.data()), font_awesome_regular.size(), 30, &config, icon_ranges);
-		io.Fonts->AddFontFromMemoryTTF(const_cast<std::byte *>(font_awesome_solid.data()), font_awesome_solid.size(), 30, &config, icon_ranges);
+		io.Fonts->AddFontFromMemoryTTF(const_cast<std::byte *>(font_awesome_regular.data()), font_awesome_regular.size(), constants::gui::font_size_small, &config, icon_ranges);
+		io.Fonts->AddFontFromMemoryTTF(const_cast<std::byte *>(font_awesome_solid.data()), font_awesome_solid.size(), constants::gui::font_size_small, &config, icon_ranges);
 	}
 
 	{
@@ -510,7 +604,7 @@ void imgui_context::initialize_fonts()
 		config.FontDataOwnedByAtlas = false;
 		for (auto & font: fonts)
 		{
-			large_font = io.Fonts->AddFontFromFileTTF(font.c_str(), 75, &config, glyph_ranges.Data);
+			large_font = io.Fonts->AddFontFromFileTTF(font.c_str(), constants::gui::font_size_large, &config, glyph_ranges.Data);
 			config.MergeMode = true;
 		}
 	}
@@ -520,21 +614,14 @@ void imgui_context::initialize_fonts()
 	ImGui_ImplVulkan_CreateFontsTexture();
 }
 
-void imgui_context::new_frame(XrTime display_time)
+std::vector<imgui_context::controller_state> imgui_context::read_controllers_state(XrTime display_time)
 {
-	ImGui::SetCurrentContext(context);
-	ImPlot::SetCurrentContext(plot_context);
-
-	if (last_display_time)
-		io.DeltaTime = std::min((display_time - last_display_time) * 1e-9f, 0.1f);
-	last_display_time = display_time;
-
-	float scroll_scale = io.DeltaTime * 3;
-
+	float scroll_scale = io.DeltaTime * constants::gui::scroll_ratio;
 	size_t new_focused_controller = focused_controller;
 
 	std::vector<controller_state> new_states;
 
+	// Get the hand/controller state from OpenXR
 	for (auto && [index, controller]: utils::enumerate(controllers))
 	{
 		auto & [ctrl, state] = controller;
@@ -552,140 +639,205 @@ void imgui_context::new_frame(XrTime display_time)
 					        index_tip.pose.position.x,
 					        index_tip.pose.position.y,
 					        index_tip.pose.position.z};
-
-					new_state.aim_orientation = orientation_;
+					// aim_orientation is ignored by ray_plane_intersection() for hands
 
 					new_state.active = true;
-					auto position_distance = ray_plane_intersection(new_state);
-
-					if (position_distance)
-					{
-						new_state.hover_distance = std::abs(position_distance->second);
-
-						if (std::abs(position_distance->second) < 0.1f)
-							new_state.fingertip_hovered = true;
-						else
-							new_state.active = false;
-
-						if (new_state.hover_distance < 0.02)
-							new_state.fingertip_touched = true;
-					}
-					else
-						new_state.hover_distance = 1e10;
+					new_state.source = ImGuiMouseSource_VRHandTracking;
 				}
 			}
+
 			continue;
 		}
+
+		new_state.source = ImGuiMouseSource_VRController;
 
 		if (auto location = application::locate_controller(ctrl.aim, world, display_time))
 		{
 			new_state.active = true;
-			new_state.aim_position = location->first;
-			new_state.aim_orientation = location->second;
-		}
+			new_state.aim_position = location->first + glm::mat3_cast(location->second * ctrl.offset.second) * ctrl.offset.first;
+			new_state.aim_orientation = location->second * ctrl.offset.second;
 
-		if (ctrl.squeeze)
-		{
-			auto squeeze = application::read_action_float(ctrl.squeeze).value_or(std::pair{0, 0});
-			new_state.squeeze_value = squeeze.second;
-
-			// TODO tunable
-			if (new_state.squeeze_value < 0.5)
-				new_state.squeeze_clicked = false;
-			else if (new_state.squeeze_value > 0.8)
-				new_state.squeeze_clicked = true;
-		}
-
-		if (ctrl.trigger)
-		{
-			auto trigger = application::read_action_float(ctrl.trigger).value_or(std::pair{0, 0});
-			new_state.trigger_value = trigger.second;
-
-			// TODO tunable
-			if (new_state.trigger_value < 0.5)
-				new_state.trigger_clicked = false;
-			else if (new_state.trigger_value > 0.8)
-				new_state.trigger_clicked = true;
-		}
-
-		if (ctrl.scroll)
-		{
-			if (auto act = application::read_action_vec2(ctrl.scroll); act)
-				new_state.scroll_value = {-act->second.x * scroll_scale, act->second.y * scroll_scale};
-			else
-				new_state.scroll_value = {0, 0};
-		}
-	}
-
-	for (auto [new_state, controller]: utils::zip(new_states, controllers))
-	{
-		if (new_state.hover_distance < 0.02 && controller.second.hover_distance >= 0.02)
-			new_state.fingertip_touched = true;
-	}
-
-	float closest_hover_distance = 1e10;
-	for (auto && [index, new_state]: utils::enumerate(new_states))
-	{
-		if (new_state.hover_distance < closest_hover_distance && new_state.fingertip_hovered)
-		{
-			new_focused_controller = index;
-			closest_hover_distance = new_state.hover_distance;
-		}
-		else if (new_state.squeeze_clicked || new_state.trigger_clicked || glm::length(new_state.scroll_value) > 0.01f)
-		{
-			new_focused_controller = index;
-		}
-	}
-
-	bool focused_change = new_focused_controller != focused_controller && focused_controller != (size_t)-1;
-
-	// Simulate a pen for the following events
-	io.AddMouseSourceEvent(ImGuiMouseSource_Pen);
-	if (focused_change && controllers[focused_controller].second.trigger_clicked)
-	{
-		// Focused controller changed: end the current click
-		io.AddMouseButtonEvent(0, false);
-		button_pressed = false;
-	}
-
-	std::optional<std::pair<ImVec2, float>> position_distance;
-
-	if (new_focused_controller != (size_t)-1)
-	{
-		position_distance = ray_plane_intersection(new_states[new_focused_controller]);
-		auto scroll = new_states[new_focused_controller].scroll_value;
-
-		bool last_trigger = controllers[new_focused_controller].second.trigger_clicked || controllers[new_focused_controller].second.fingertip_touched;
-		button_pressed = new_states[new_focused_controller].trigger_clicked ||
-		                 (new_states[new_focused_controller].fingertip_touched && !controllers[new_focused_controller].second.fingertip_touched);
-
-		if (position_distance)
-		{
-			io.AddMousePosEvent(position_distance->first.x, position_distance->first.y);
-
-			if (focused_change || last_trigger != button_pressed)
+			if (ctrl.trigger)
 			{
-				io.AddMouseButtonEvent(0, button_pressed);
+				auto trigger = application::read_action_float(ctrl.trigger).value_or(std::pair{0, 0});
+				new_state.trigger_value = trigger.second;
+
+				// TODO tunable
+				/*if (new_state.trigger_value < 0.5)
+				        new_state.trigger_clicked = false;
+				else */
+				if (new_state.trigger_value > constants::gui::trigger_click_thd)
+					new_state.trigger_clicked = true;
 			}
 
-			if (glm::length(scroll) > 0.01f)
-				io.AddMouseWheelEvent(scroll.x, scroll.y);
-		}
-		else
-		{
-			if (last_trigger && !button_pressed)
+			if (ctrl.scroll)
 			{
-				io.AddMouseButtonEvent(0, button_pressed);
+				if (auto act = application::read_action_vec2(ctrl.scroll); act)
+					new_state.scroll_value = {-act->second.x * scroll_scale, act->second.y * scroll_scale};
+				else
+					new_state.scroll_value = {0, 0};
 			}
 		}
+	}
+
+	// Compute the position in imgui frame according to the currently displayed windows (from the last frame)
+	for (auto & state: new_states)
+	{
+		compute_pointer_position(state);
+
+		if (state.source == ImGuiMouseSource_VRHandTracking)
+		{
+			if (state.hover_distance < constants::gui::fingertip_distance_hovering_thd)
+				state.fingertip_hovering = true;
+
+			if (state.hover_distance < constants::gui::fingertip_distance_touching_thd)
+				state.fingertip_touching = true;
+		}
+	}
+
+	return new_states;
+}
+
+void imgui_context::compute_pointer_position(imgui_context::controller_state & state)
+{
+	auto intersections = ray_plane_intersection(state);
+
+	if (intersections.empty())
+	{
+		state.hover_distance = std::numeric_limits<float>::infinity();
+		state.pointer_position = std::nullopt;
+		return;
+	}
+
+	if (ImGuiWindow * modal_popup = ImGui::GetTopMostAndVisiblePopupModal())
+	{
+		// If there is a popup window, use the viewport of that window or the virtual keyboard
+		for (auto & i: layers_)
+		{
+			if (i.space != xr::spaces::world)
+				continue;
+
+			if (window_intersects_viewport(modal_popup, i) or i.always_show_cursor)
+			{
+				for (auto [position, distance]: intersections)
+				{
+					if (in_viewport(i, position))
+					{
+						state.hover_distance = distance;
+						state.pointer_position = position;
+						return;
+					}
+				}
+			}
+		}
+
+		state.hover_distance = std::numeric_limits<float>::infinity();
+		state.pointer_position = std::nullopt;
 	}
 	else
 	{
-		position_distance = {};
+		// Intersections are sorted by distance: take the closest one
+		for (auto [position, distance]: intersections)
+		{
+			for (ImGuiWindow * window: context->Windows)
+			{
+				if (not window->Active or window->Hidden)
+					continue;
+
+				if (in_window(window, position))
+				{
+					state.hover_distance = distance;
+					state.pointer_position = position;
+					return;
+				}
+			}
+		}
+
+		// If the pointer isn't in any window, take the farthest one
+		std::tie(state.pointer_position, state.hover_distance) = intersections.back();
+	}
+}
+
+size_t imgui_context::choose_focused_controller(const std::vector<controller_state> & new_states) const
+{
+	// If only one controller points at a GUI layer, select it
+	size_t new_focused_controller = (size_t)-1;
+	size_t count = 0;
+	for (auto && [index, state]: utils::enumerate(new_states))
+	{
+		if (state.pointer_position)
+		{
+			count++;
+			new_focused_controller = index;
+		}
+	}
+
+	if (count == 1)
+		return new_focused_controller;
+
+	// If there is a rising edge on a trigger, select the controller
+	assert(controllers.size() == new_states.size());
+	for (size_t index = 0, size = controllers.size(); index < size; ++index)
+	{
+		const auto & old_state = controllers[index].second;
+		const auto & new_state = new_states[index];
+
+		bool old_click = (old_state.source == ImGuiMouseSource_VRController and old_state.trigger_clicked) or
+		                 (old_state.source == ImGuiMouseSource_VRHandTracking and old_state.fingertip_touching);
+
+		bool new_click = (new_state.source == ImGuiMouseSource_VRController and new_state.trigger_clicked) or
+		                 (new_state.source == ImGuiMouseSource_VRHandTracking and new_state.fingertip_touching);
+
+		if (not old_click and new_click)
+			return index;
+	}
+
+	// Else, keep the last controller active
+	return focused_controller;
+}
+
+void imgui_context::new_frame(XrTime display_time)
+{
+	ImGui::SetCurrentContext(context);
+	ImPlot::SetCurrentContext(plot_context);
+
+	if (last_display_time)
+		io.DeltaTime = std::min((display_time - last_display_time) * 1e-9f, 0.1f);
+	last_display_time = display_time;
+
+	// Uses the window list from last frame
+	auto new_states = read_controllers_state(display_time);
+
+	// Set the currently active controller
+	size_t new_focused_controller = choose_focused_controller(new_states);
+
+	bool focused_change = new_focused_controller != focused_controller && focused_controller != (size_t)-1;
+
+	// Set the source for the following events
+	if (focused_controller != (size_t)-1)
+		io.AddMouseSourceEvent(new_states[focused_controller].source);
+
+	if (new_focused_controller != (size_t)-1)
+	{
+		auto scroll = new_states[new_focused_controller].scroll_value;
+
+		button_pressed = new_states[new_focused_controller].trigger_clicked;
+		fingertip_touching = new_states[new_focused_controller].fingertip_touching;
+
+		// Focused controller changed: end the current click for this frame
+		io.AddMouseButtonEvent(0, (button_pressed or fingertip_touching) and not focused_change);
+
+		if (auto position = new_states[new_focused_controller].pointer_position)
+		{
+			io.AddMousePosEvent(position->x, position->y);
+
+			if (glm::length(scroll) > constants::gui::scroll_value_thd)
+				io.AddMouseWheelEvent(scroll.x, scroll.y);
+		}
 	}
 
 	focused_controller = new_focused_controller;
-	for (auto && [controller, next_state]: utils::zip(controllers, new_states))
+	for (auto && [controller, next_state]: std::views::zip(controllers, new_states))
 	{
 		controller.second = next_state;
 	}
@@ -718,37 +870,106 @@ void imgui_context::new_frame(XrTime display_time)
 
 	ImGui::NewFrame();
 
-	ImDrawList * draw_list = ImGui::GetForegroundDrawList();
-
-	if (position_distance)
-	{
-		float distance_to_border = std::min({position_distance->first.x,
-		                                     size.width - position_distance->first.x,
-		                                     position_distance->first.y,
-		                                     size.height - position_distance->first.y});
-
-		float radius = 10; // std::clamp<float>(distance_to_border / 4, 0, 10);
-		float alpha = std::clamp<float>((distance_to_border - 10) / 50, 0, 0.8);
-
-		ImU32 color_pressed = ImGui::GetColorU32(ImVec4(0, 0.2, 1, alpha));
-		ImU32 color_unpressed = ImGui::GetColorU32(ImVec4(1, 1, 1, alpha));
-
-		bool pressed = button_pressed || new_states[new_focused_controller].fingertip_touched;
-
-		draw_list->AddCircleFilled(position_distance->first, radius, pressed ? color_pressed : color_unpressed);
-		draw_list->AddCircle(position_distance->first, radius * 1.2, ImGui::GetColorU32(ImVec4(0, 0, 0, alpha)), 0, radius * 0.4);
-	}
+#if WIVRN_SHOW_IMGUI_DEMO_WINDOW
+	if (show_demo_window)
+		ImGui::ShowDemoWindow(&show_demo_window);
+#endif
 
 	image_index = swapchain.acquire();
 	swapchain.wait();
 }
 
-XrCompositionLayerQuad imgui_context::end_frame()
+std::vector<std::pair<int, XrCompositionLayerQuad>> imgui_context::end_frame()
 {
 	vk::Image destination = swapchain.images()[image_index].image;
 
 	ImGui::SetCurrentContext(context);
 	ImPlot::SetCurrentContext(plot_context);
+
+	for (auto & controller: controllers)
+	{
+		if (auto position = controller.second.pointer_position)
+		{
+			// Clip in the right plane
+			ImVec2 clip_rect_min(0, 0);
+			ImVec2 clip_rect_max(0, 0);
+
+			// If there is a modal popup, only display the cursor in the viewport of the popup or on the virtual keyboard
+			if (ImGuiWindow * modal_popup = ImGui::GetTopMostAndVisiblePopupModal())
+			{
+				for (auto & i: layers_)
+				{
+					if (i.space != xr::spaces::world)
+						continue;
+
+					// The cursor is over the virtual keyboard
+					if (i.always_show_cursor and
+					    position->x >= i.vp_origin.x and
+					    position->y >= i.vp_origin.y and
+					    position->x <= i.vp_origin.x + i.vp_size.x and
+					    position->y <= i.vp_origin.y + i.vp_size.y)
+					{
+						clip_rect_min = ImVec2(i.vp_origin.x + 1, i.vp_origin.y + 1);
+						clip_rect_max = ImVec2(i.vp_origin.x + i.vp_size.x, i.vp_origin.y + i.vp_size.y);
+						break;
+					}
+
+					// The cursor is in the same viewport as the popup
+					if (window_intersects_viewport(modal_popup, i) and
+					    position->x >= i.vp_origin.x and
+					    position->y >= i.vp_origin.y and
+					    position->x <= i.vp_origin.x + i.vp_size.x and
+					    position->y <= i.vp_origin.y + i.vp_size.y)
+					{
+						clip_rect_min = ImVec2(i.vp_origin.x + 1, i.vp_origin.y + 1);
+						clip_rect_max = ImVec2(i.vp_origin.x + i.vp_size.x, i.vp_origin.y + i.vp_size.y);
+						break;
+					}
+				}
+			}
+			else
+			{
+				for (auto & i: layers_)
+				{
+					if (position->x < i.vp_origin.x or
+					    position->y < i.vp_origin.y or
+					    position->x > i.vp_origin.x + i.vp_size.x or
+					    position->y > i.vp_origin.y + i.vp_size.y)
+						continue;
+
+					clip_rect_min = ImVec2(i.vp_origin.x + 1, i.vp_origin.y + 1);
+					clip_rect_max = ImVec2(i.vp_origin.x + i.vp_size.x, i.vp_origin.y + i.vp_size.y);
+
+					break;
+				}
+			}
+
+			// Compute the distance to the closest window
+			float distance = std::numeric_limits<float>::infinity();
+			for (ImGuiWindow * window: context->Windows)
+			{
+				distance = std::min(distance, distance_to_window(window, *position));
+			}
+
+			float alpha = std::clamp<float>(1 - distance / constants::gui::pointer_fading_distance, 0, 1);
+
+			if (&controller == &controllers[focused_controller])
+				alpha *= constants::gui::pointer_alpha;
+			else
+				alpha *= constants::gui::pointer_alpha_disabled;
+
+			ImU32 color_pressed = ImGui::GetColorU32(constants::gui::pointer_color_pressed, alpha);
+			ImU32 color_unpressed = ImGui::GetColorU32(constants::gui::pointer_color_unpressed, alpha);
+
+			bool pressed = controller.second.trigger_clicked || controller.second.fingertip_touching;
+
+			ImDrawList * draw_list = ImGui::GetForegroundDrawList();
+			draw_list->PushClipRect(clip_rect_min, clip_rect_max);
+			draw_list->AddCircleFilled(*position, constants::gui::pointer_radius_in, pressed ? color_pressed : color_unpressed);
+			draw_list->AddCircle(*position, constants::gui::pointer_radius_out, ImGui::GetColorU32(constants::gui::pointer_color_border, alpha), 0, constants::gui::pointer_thickness);
+			draw_list->PopClipRect();
+		}
+	}
 
 	ImGui::Render();
 
@@ -790,20 +1011,64 @@ XrCompositionLayerQuad imgui_context::end_frame()
 
 	swapchain.release();
 
-	return XrCompositionLayerQuad{
-	        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-	        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-	        .space = world,
-	        .eyeVisibility = XrEyeVisibility::XR_EYE_VISIBILITY_BOTH,
-	        .subImage = {
-	                .swapchain = swapchain,
-	                .imageRect = {
-	                        .offset = {0, 0},
-	                        .extent = {(int32_t)size.width, (int32_t)size.height}},
-	        },
-	        .pose = pose(),
-	        .size = scale(),
-	};
+	std::vector<std::pair<int, XrCompositionLayerQuad>> quads;
+	quads.reserve(layers_.size());
+
+	for (auto & i: layers_)
+	{
+		bool visible = false;
+		for (ImGuiWindow * window: context->Windows)
+		{
+			if (window->Active and not window->Hidden and window_intersects_viewport(window, i))
+			{
+				visible = true;
+				break;
+			}
+		}
+
+		if (not visible)
+			continue;
+
+		quads.emplace_back(
+		        i.z_index,
+		        XrCompositionLayerQuad{
+		                .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+		                .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+		                .space = application::space(i.space),
+		                .eyeVisibility = XrEyeVisibility::XR_EYE_VISIBILITY_BOTH,
+		                .subImage = {
+		                        .swapchain = swapchain,
+		                        .imageRect = {
+		                                .offset = {
+		                                        .x = i.vp_origin.x,
+		                                        .y = i.vp_origin.y,
+		                                },
+		                                .extent = {
+		                                        .width = i.vp_size.x,
+		                                        .height = i.vp_size.y,
+		                                }},
+		                },
+		                .pose = {
+		                        .orientation = {
+		                                .x = i.orientation.x,
+		                                .y = i.orientation.y,
+		                                .z = i.orientation.z,
+		                                .w = i.orientation.w,
+		                        },
+		                        .position = {
+		                                .x = i.position.x,
+		                                .y = i.position.y,
+		                                .z = i.position.z,
+		                        },
+		                },
+		                .size = {
+		                        .width = i.size.x,
+		                        .height = i.size.y,
+		                },
+		        });
+	}
+
+	return quads;
 }
 
 imgui_context::~imgui_context()
@@ -893,4 +1158,20 @@ void imgui_context::set_current()
 {
 	ImGui::SetCurrentContext(context);
 	ImPlot::SetCurrentContext(plot_context);
+}
+
+bool imgui_context::is_modal_popup_shown() const
+{
+	return ImGui::GetTopMostAndVisiblePopupModal() != nullptr;
+}
+
+imgui_context::viewport & imgui_context::layer(ImVec2 position)
+{
+	for (auto & layer: layers_)
+	{
+		if (in_viewport(layer, position))
+			return layer;
+	}
+
+	return layers_.front();
 }

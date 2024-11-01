@@ -18,7 +18,9 @@
 
 #pragma once
 
+#include "wivrn_config.h"
 #include "xr/hand_tracker.h"
+#include "xr/space.h"
 #include "xr/swapchain.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -58,6 +60,8 @@ public:
 	struct controller
 	{
 		XrSpace aim;
+		std::pair<glm::vec3, glm::quat> offset;
+
 		XrAction trigger; // XR_ACTION_TYPE_FLOAT_INPUT
 		XrAction squeeze; // XR_ACTION_TYPE_FLOAT_INPUT
 		XrAction scroll;  // XR_ACTION_TYPE_VECTOR2F_INPUT
@@ -74,15 +78,38 @@ public:
 		glm::quat aim_orientation = {1, 0, 0, 0};
 
 		float trigger_value = 0;
-		float squeeze_value = 0;
 		glm::vec2 scroll_value = {0, 0};
 
+		std::optional<ImVec2> pointer_position;
 		float hover_distance = 1e10;
 
 		bool squeeze_clicked = false;
 		bool trigger_clicked = false;
-		bool fingertip_hovered = false;
-		bool fingertip_touched = false;
+		bool fingertip_hovering = false;
+		bool fingertip_touching = false;
+		ImGuiMouseSource source = ImGuiMouseSource_Mouse;
+	};
+
+	struct viewport
+	{
+		// Position of this viewport in the world
+		xr::spaces space; // Must be world to allow the cursor to work
+		glm::vec3 position;
+		glm::quat orientation;
+		glm::vec2 size;
+
+		// Position of this viewport in the swapchain image
+		glm::ivec2 vp_origin;
+		glm::ivec2 vp_size;
+
+		bool always_show_cursor = false; // Show the cursor in this viewport even if there is a modal popup elsewhere (eg. this is a virtual keyboard)
+
+		int z_index = 0;
+
+		ImVec2 vp_center() const
+		{
+			return ImVec2(vp_origin.x + int(vp_size.x / 2), vp_origin.y + int(vp_size.y / 2));
+		}
 	};
 
 private:
@@ -113,9 +140,7 @@ private:
 	vk::Format format;
 	vk::ClearValue clear_value = {vk::ClearColorValue{0, 0, 0, 0}};
 
-	glm::vec3 position_ = {0, 1, -1.5};
-	glm::quat orientation_ = {1, 0, 0, 0};
-	glm::vec2 scale_;
+	std::vector<viewport> layers_;
 
 	xr::swapchain & swapchain;
 	int image_index;
@@ -130,12 +155,20 @@ private:
 	XrTime last_display_time = 0;
 
 	bool button_pressed = false;
+	bool fingertip_touching = false;
 
 	ImFontGlyphRangesBuilder glyph_range_builder;
 	ImVector<ImWchar> glyph_ranges;
 	bool glyph_range_dirty = true;
 
+#if WIVRN_SHOW_IMGUI_DEMO_WINDOW
+	bool show_demo_window = true;
+#endif
+
 	void initialize_fonts();
+
+	std::vector<controller_state> read_controllers_state(XrTime display_time);
+	size_t choose_focused_controller(const std::vector<controller_state> & new_states) const;
 
 public:
 	imgui_context(
@@ -143,66 +176,21 @@ public:
 	        vk::raii::Device & device,
 	        uint32_t queue_family_index,
 	        vk::raii::Queue & queue,
-	        XrSpace world,
 	        std::span<controller> controllers,
 	        xr::swapchain & swapchain,
-	        glm::vec2 size);
+	        std::vector<viewport> layers);
 
 	~imgui_context();
 
-	void set_position(glm::vec3 position, glm::quat orientation)
+	std::span<viewport> layers()
 	{
-		position_ = position;
-		orientation_ = orientation;
+		return layers_;
 	}
 
-	XrPosef pose() const
-	{
-		return XrPosef{
-		        .orientation = {
-		                .x = orientation_.x,
-		                .y = orientation_.y,
-		                .z = orientation_.z,
-		                .w = orientation_.w,
-		        },
-		        .position = {
-		                .x = position_.x,
-		                .y = position_.y,
-		                .z = position_.z,
-		        },
-		};
-	}
-
-	glm::vec3 & position()
-	{
-		return position_;
-	}
-
-	glm::quat & orientation()
-	{
-		return orientation_;
-	}
-
-	glm::vec3 position() const
-	{
-		return position_;
-	}
-
-	glm::quat orientation() const
-	{
-		return orientation_;
-	}
-
-	XrExtent2Df scale() const
-	{
-		return {
-		        scale_.x,
-		        scale_.y,
-		};
-	}
+	viewport & layer(ImVec2 position);
 
 	void new_frame(XrTime display_time);
-	XrCompositionLayerQuad end_frame();
+	std::vector<std::pair<int, XrCompositionLayerQuad>> end_frame();
 
 	ImFont * large_font;
 	size_t get_focused_controller() const
@@ -210,7 +198,11 @@ public:
 		return focused_controller;
 	}
 
-	std::optional<std::pair<ImVec2, float>> ray_plane_intersection(const imgui_context::controller_state & in) const;
+	std::vector<std::pair<ImVec2, float>> ray_plane_intersection(const controller_state & in) const;
+	void compute_pointer_position(controller_state & state);
+
+	// Convert position from viewport coordinates to real-world
+	glm::vec3 rw_from_vp(const ImVec2 & position);
 
 	ImTextureID load_texture(const std::string & filename, vk::raii::Sampler && sampler);
 	ImTextureID load_texture(const std::string & filename);
@@ -218,4 +210,5 @@ public:
 	void set_current();
 
 	void add_chars(std::string_view sv);
+	bool is_modal_popup_shown() const;
 };

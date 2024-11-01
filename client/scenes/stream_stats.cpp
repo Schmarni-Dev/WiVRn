@@ -27,6 +27,7 @@
 #include "utils/ranges.h"
 #include <cmath>
 #include <limits>
+#include <ranges>
 #include <spdlog/spdlog.h>
 
 namespace
@@ -106,7 +107,7 @@ void scenes::stream::accumulate_metrics(XrTime predicted_display_time, const std
 			min_encode_begin = std::min(min_encode_begin, bh->timing_info.encode_begin);
 	}
 
-	for (auto && [metrics, bh]: utils::zip(decoder_metrics, blit_handles))
+	for (auto && [metrics, bh]: std::views::zip(decoder_metrics, blit_handles))
 	{
 		if (metrics.size() != global_metrics.size())
 			metrics.resize(global_metrics.size());
@@ -131,7 +132,7 @@ void scenes::stream::accumulate_metrics(XrTime predicted_display_time, const std
 	metrics_offset = (metrics_offset + 1) % global_metrics.size();
 }
 
-XrCompositionLayerQuad scenes::stream::plot_performance_metrics(XrTime predicted_display_time)
+std::vector<XrCompositionLayerQuad> scenes::stream::plot_performance_metrics(XrTime predicted_display_time)
 {
 	imgui_ctx->new_frame(predicted_display_time);
 	const ImGuiStyle & style = ImGui::GetStyle();
@@ -319,5 +320,9 @@ XrCompositionLayerQuad scenes::stream::plot_performance_metrics(XrTime predicted
 	}
 	ImGui::End();
 
-	return imgui_ctx->end_frame();
+	std::vector<XrCompositionLayerQuad> layers;
+	for (auto & layer: imgui_ctx->end_frame())
+		layers.push_back(layer.second);
+
+	return layers;
 }

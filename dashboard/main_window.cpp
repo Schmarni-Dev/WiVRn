@@ -531,6 +531,7 @@ void main_window::on_steam_command_changed(QString value)
 void main_window::on_server_finished(int exit_code, QProcess::ExitStatus status)
 {
 	qDebug() << "Server exited with code" << exit_code << ", status" << status;
+	server_process_timeout->stop();
 
 	disconnect(server_process, &QProcess::finished, this, &main_window::on_server_finished);
 	disconnect(server_process, &QProcess::errorOccurred, this, &main_window::on_server_error_occurred);
@@ -571,6 +572,7 @@ void main_window::on_server_finished(int exit_code, QProcess::ExitStatus status)
 void main_window::on_server_error_occurred(QProcess::ProcessError error)
 {
 	qDebug() << "on_server_error_occurred" << error;
+	server_process_timeout->stop();
 
 	QString error_message;
 	switch (error)
@@ -629,6 +631,10 @@ void main_window::on_action_settings()
 	assert(not settings_window);
 
 	settings_window = new settings(server_interface);
+	connect(settings_window, &QDialog::finished, this, [&]() {
+		settings_window->deleteLater();
+		settings_window = nullptr;
+	});
 	settings_window->exec();
 }
 

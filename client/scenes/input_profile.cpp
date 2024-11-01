@@ -20,6 +20,8 @@
 
 #include "application.h"
 #include "asset.h"
+#include "hardware.h"
+#include <glm/gtc/matrix_access.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <magic_enum.hpp>
 #include <simdjson.h>
@@ -130,7 +132,7 @@ struct json_visual_response
 };
 } // namespace
 
-input_profile::input_profile(const std::filesystem::path & json_profile, scene_loader & loader, scene_data & scene)
+input_profile::input_profile(const std::filesystem::path & json_profile, scene_loader & loader, scene_data & scene_controllers, scene_data & scene_rays)
 {
 	std::string json = asset(json_profile);
 
@@ -206,20 +208,46 @@ input_profile::input_profile(const std::filesystem::path & json_profile, scene_l
 
 	for (auto && [layout, model]: models)
 	{
-		node_handle root_node = scene.new_node();
+		node_handle root_node = scene_controllers.new_node();
 		root_node->name = layout;
 
-		XrSpace space;
+		xr::spaces space;
 		if (layout == "left")
-			space = application::space(xr::spaces::grip_left);
+			space = xr::spaces::grip_left;
 		else if (layout == "right")
-			space = application::space(xr::spaces::grip_right);
+			space = xr::spaces::grip_right;
+		else if (layout == "left_aim")
+			space = xr::spaces::aim_left;
+		else if (layout == "right_aim")
+			space = xr::spaces::aim_right;
 		else
 			continue;
 
 		model_handles.emplace_back(space, root_node);
 
-		scene.import(std::move(model), root_node);
+		scene_controllers.import(std::move(model), root_node);
+	}
+
+	for (simdjson::dom::key_value_pair layout: simdjson::dom::object(root["layouts"]))
+	{
+		xr::spaces space;
+		if (layout.key == "left")
+			space = xr::spaces::aim_left;
+		else if (layout.key == "right")
+			space = xr::spaces::aim_right;
+		else
+			continue;
+
+		node_handle root_node = scene_rays.new_node();
+		root_node->name = (std::string)layout.key + "_ray";
+		model_handles.emplace_back(space, root_node);
+
+		scene_rays.import(loader(controller_ray_model_name()), root_node);
+
+		if (layout.key == "left")
+			left_ray = root_node;
+		else if (layout.key == "right")
+			right_ray = root_node;
 	}
 
 	for (auto & json_response: json_responses)
@@ -272,9 +300,11 @@ input_profile::input_profile(const std::filesystem::path & json_profile, scene_l
 			}
 		}
 
-		response.target.node = scene.find_node(controller_root_node, json_response.target_node);
+		response.target.node = scene_controllers.find_node(controller_root_node, json_response.target_node);
 		response.target.state = json_response.state;
 	}
+
+	offset.fill({{0, 0, 0}, {1, 0, 0, 0}});
 }
 
 static void apply_visual_response(node_handle node, std::pair<input_profile::node_state_transform, input_profile::node_state_transform> transforms, float value)
@@ -288,33 +318,76 @@ static void apply_visual_response(node_handle node, input_profile::node_state_vi
 	node->visible = value > 0.5;
 }
 
-void input_profile::apply(XrSpace world_space, XrTime predicted_display_time, bool hide_left, bool hide_right)
+static void set_clipping_planes(node_handle node, std::span<glm::vec4> clipping_planes)
+{
+	if (not node)
+		return;
+
+	// If the ray starts on the wrong side of the GUI, hide it entirely
+	// This assumes the node is a child of the root node
+	for (glm::vec4 & plane: clipping_planes)
+	{
+		if (glm::dot(plane, glm::vec4(node->position, 1)) < 0)
+		{
+			node->visible = false;
+			return;
+		}
+	}
+
+	node->visible = true;
+
+	for (auto child_node: node.children())
+	{
+		size_t nb_clipping_planes = std::min(child_node->clipping_planes.size(), clipping_planes.size());
+
+		auto copy_results = std::ranges::copy_n(
+		        clipping_planes.begin(),
+		        nb_clipping_planes,
+		        child_node->clipping_planes.begin());
+
+		// Disable the remaining clipping planes
+		std::ranges::fill_n(
+		        copy_results.out,
+		        child_node->clipping_planes.size() - nb_clipping_planes,
+		        glm::vec4(0, 0, 0, 1));
+	}
+}
+
+void input_profile::apply(XrSpace world_space, XrTime predicted_display_time, bool hide_left, bool hide_right, std::span<glm::vec4> pointer_limits)
 {
 	for (auto && [space, node]: model_handles)
 	{
-		if (space == application::space(xr::spaces::grip_left) && hide_left)
+		if ((space == xr::spaces::grip_left or space == xr::spaces::aim_left) and hide_left)
 		{
 			node->visible = false;
 			continue;
 		}
 
-		if (space == application::space(xr::spaces::grip_right) && hide_right)
+		if ((space == xr::spaces::grip_right or space == xr::spaces::aim_right) and hide_right)
 		{
 			node->visible = false;
 			continue;
 		}
 
-		if (auto location = application::locate_controller(space, world_space, predicted_display_time); location)
+		if (auto location = application::locate_controller(application::space(space), world_space, predicted_display_time); location)
 		{
 			node->visible = true;
-			node->position = location->first;
-			node->orientation = location->second;
+
+			assert((int)space >= 0);
+			assert((int)space < offset.size());
+			auto & [p, q] = offset[space];
+
+			node->position = location->first + glm::mat3_cast(location->second * q) * p;
+			node->orientation = location->second * q;
 		}
 		else
 		{
 			node->visible = false;
 		}
 	}
+
+	set_clipping_planes(left_ray, pointer_limits);
+	set_clipping_planes(right_ray, pointer_limits);
 
 	for (auto & response: responses)
 	{

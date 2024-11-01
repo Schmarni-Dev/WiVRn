@@ -24,7 +24,9 @@
 #include "render/scene_data.h"
 #include "scene.h"
 #include "scenes/hand_model.h"
+#include "scenes/lobby_keyboard.h"
 #include "wifi_lock.h"
+#include "wivrn_config.h"
 #include "wivrn_discover.h"
 #include <vulkan/vulkan_raii.hpp>
 
@@ -49,9 +51,11 @@ class lobby : public scene_impl<lobby>
 	std::optional<wivrn_discover> discover;
 	wifi_lock::multicast multicast;
 
-	char add_server_window_prettyname[200];
-	char add_server_window_hostname[200];
-	int add_server_window_port;
+	std::string add_server_window_prettyname;
+	std::string add_server_window_hostname;
+	int add_server_window_port = wivrn::default_port;
+	bool add_server_tcp_only = false;
+	std::string add_server_cookie;
 
 	utils::future<std::unique_ptr<wivrn_session>, std::string> async_session;
 	std::optional<std::string> async_error;
@@ -65,6 +69,9 @@ class lobby : public scene_impl<lobby>
 	std::optional<input_profile> input;
 	std::optional<hand_model> left_hand;
 	std::optional<hand_model> right_hand;
+	node_handle lobby_handle;
+	bool composition_layer_depth_test_supported;
+	bool composition_layer_color_scale_bias_supported;
 
 	std::optional<imgui_context> imgui_ctx;
 	std::array<XrAction, 2> haptic_output;
@@ -74,28 +81,46 @@ class lobby : public scene_impl<lobby>
 	ImGuiID hovered_item;
 
 	std::vector<xr::swapchain> swapchains_lobby;
+	std::vector<xr::swapchain> swapchains_lobby_depth;
 	std::vector<xr::swapchain> swapchains_controllers;
+	std::vector<xr::swapchain> swapchains_controllers_depth;
 	xr::swapchain swapchain_imgui;
 	vk::Format swapchain_format;
+	vk::Format depth_format;
 	xr::system::passthrough_type passthrough_supported;
 	xr::passthrough passthrough;
 	XrViewConfigurationView stream_view;
 
+#if WIVRN_CLIENT_DEBUG_MENU
+	// GUI debug
+	node_handle xyz_axes_left_controller;
+	node_handle xyz_axes_right_controller;
+	bool display_debug_axes = false;
+	bool display_grip_instead_of_aim = false;
+	glm::vec3 offset_position{};
+	glm::vec3 offset_orientation{};
+	float ray_offset{};
+#endif
+
 	void update_server_list();
 
-	XrCompositionLayerQuad draw_gui(XrTime predicted_display_time);
+	std::vector<std::pair<int, XrCompositionLayerQuad>> draw_gui(XrTime predicted_display_time);
 
 	XrAction recenter_left_action = XR_NULL_HANDLE;
 	XrAction recenter_right_action = XR_NULL_HANDLE;
+	std::optional<glm::vec3> gui_recenter_position;
 	std::optional<float> gui_recenter_distance;
 	bool recenter_gui = true;
 	void move_gui(glm::vec3 head_position, glm::vec3 new_gui_position);
+	void tooltip(std::string_view text);
 
 	enum class tab
 	{
 		server_list,
-		new_server,
 		settings,
+#if WIVRN_CLIENT_DEBUG_MENU
+		debug,
+#endif
 		about,
 		licenses,
 		exit
@@ -105,14 +130,17 @@ class lobby : public scene_impl<lobby>
 	tab last_current_tab = tab::server_list;
 	ImTextureID about_picture;
 
+	virtual_keyboard keyboard;
+
 	void draw_features_status(XrTime predicted_display_time);
 	void gui_connecting();
 	void gui_server_list();
-	void gui_add_server();
+	void gui_new_server();
 	void gui_settings();
+	void gui_debug();
 	void gui_about();
 	void gui_licenses();
-	void gui_keyboard(ImVec2 size);
+	void gui_keyboard();
 
 	void setup_passthrough();
 
@@ -121,7 +149,7 @@ class lobby : public scene_impl<lobby>
 	void connect(const configuration::server_data & data);
 
 	std::optional<glm::vec3> check_recenter_gesture(const std::array<xr::hand_tracker::joint, XR_HAND_JOINT_COUNT_EXT> & joints);
-	std::optional<glm::vec3> check_recenter_action(XrTime predicted_display_time);
+	std::optional<glm::vec3> check_recenter_action(XrTime predicted_display_time, glm::vec3 head_position);
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
 
 public:

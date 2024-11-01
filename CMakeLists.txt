@@ -32,6 +32,7 @@ option(WIVRN_WERROR "Treat warnings as errors" OFF)
 
 option(WIVRN_USE_NVENC "Enable nvenc (Nvidia) hardware encoder" ON)
 auto_option(WIVRN_USE_VAAPI "Enable vaapi (AMD/Intel) hardware encoder" AUTO)
+auto_option(WIVRN_USE_VULKAN_ENCODE "Enable vulkan video encoder" AUTO)
 auto_option(WIVRN_USE_X264 "Enable x264 software encoder" AUTO)
 
 auto_option(WIVRN_USE_PIPEWIRE "Enable pipewire backend" AUTO)
@@ -42,6 +43,10 @@ option(WIVRN_FEATURE_SOLARXR "Enable SolarXR driver" OFF)
 option(WIVRN_FEATURE_STEAMVR_LIGHTHOUSE "Enable SteamVR Lighthouse driver" OFF)
 
 option(WIVRN_CHECK_CAPSYSNICE "Check if CAP_SYS_NICE is available at startup" ON)
+set(WIVRN_CSS "${CMAKE_SOURCE_DIR}/images/wivrn-local.css" CACHE STRING "Stylesheet to use to render SVGs" )
+
+option(WIVRN_SHOW_IMGUI_DEMO_WINDOW "Show the Dear ImGui demo window in the client" OFF)
+option(WIVRN_CLIENT_DEBUG_MENU "Enable the debug menu in the client" OFF)
 
 option(WIVRN_OPENXR_INSTALL_ABSOLUTE_RUNTIME_PATH OFF)
 
@@ -94,6 +99,18 @@ if (WIVRN_BUILD_SERVER)
     elseif (WIVRN_USE_VAAPI)
         pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale libavfilter)
         pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
+    endif()
+
+    if (WIVRN_USE_VULKAN_ENCODE STREQUAL "AUTO")
+        if (Vulkan_VERSION VERSION_GREATER_EQUAL 1.3.283)
+            set(WIVRN_USE_VULKAN_ENCODE ON)
+        else()
+            set(WIVRN_USE_VULKAN_ENCODE OFF)
+        endif()
+    elseif(WIVRN_USE_VULKAN_ENCODE)
+        if (Vulkan_VERSION VERSION_LESS 1.3.283)
+            message(FATAL_ERROR "Vulkan video encode requires 1.3.283, found ${Vulkan_VERSION}")
+        endif()
     endif()
 
     if (WIVRN_USE_X264 STREQUAL "AUTO")
@@ -199,15 +216,18 @@ FetchContent_Declare(spdlog        EXCLUDE_FROM_ALL SYSTEM URL https://github.co
 FetchContent_Declare(stb           EXCLUDE_FROM_ALL SYSTEM URL https://github.com/nothings/stb/archive/013ac3beddff3dbffafd5177e7972067cd2b5083.zip)
 FetchContent_Declare(libktx        EXCLUDE_FROM_ALL SYSTEM URL https://github.com/KhronosGroup/KTX-Software/archive/refs/tags/v4.3.0.tar.gz)
 FetchContent_Declare(implot        EXCLUDE_FROM_ALL SYSTEM URL https://github.com/epezent/implot/archive/refs/tags/v0.16.tar.gz)
-FetchContent_Declare(imgui         EXCLUDE_FROM_ALL SYSTEM URL https://github.com/ocornut/imgui/archive/refs/tags/v1.90.1.tar.gz)
+FetchContent_Declare(imgui         EXCLUDE_FROM_ALL SYSTEM URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.3.tar.gz
+                                   PATCH_COMMAND    ${CMAKE_CURRENT_LIST_DIR}/patches/apply.sh ${CMAKE_CURRENT_LIST_DIR}/patches/imgui/
+)
 # Use the docking branch of imgui to use multi-viewport
 # FetchContent_Declare(imgui         EXCLUDE_FROM_ALL URL https://github.com/ocornut/imgui/archive/ce0d0ac8298ce164b5d862577e8b087d92f6e90e.zip)
+FetchContent_Declare(uni-algo      EXCLUDE_FROM_ALL SYSTEM URL https://github.com/uni-algo/uni-algo/archive/v1.2.0.tar.gz)
 
 # Server dependencies
 FetchContent_Declare(monado
     GIT_REPOSITORY   https://gitlab.freedesktop.org/monado/monado
     # The flatpak manifest is updated automatically
-    GIT_TAG          d7089f182b0514e13554e99512d63e69c30523c5
+    GIT_TAG          cef70d03ca749225af0de57824270ad708bd828a
     PATCH_COMMAND    ${CMAKE_CURRENT_LIST_DIR}/patches/apply.sh ${CMAKE_CURRENT_LIST_DIR}/patches/monado/
     EXCLUDE_FROM_ALL
     )
@@ -223,9 +243,10 @@ if (WIVRN_BUILD_SERVER)
     add_subdirectory(server)
 
     message("Selected encoders:")
-    message("\tNVENC: ${WIVRN_USE_NVENC}")
-    message("\tVAAPI: ${WIVRN_USE_VAAPI}")
-    message("\tx264 : ${WIVRN_USE_X264}")
+    message("\tNVENC : ${WIVRN_USE_NVENC}")
+    message("\tVAAPI : ${WIVRN_USE_VAAPI}")
+    message("\tVulkan: ${WIVRN_USE_VULKAN_ENCODE}")
+    message("\tx264  : ${WIVRN_USE_X264}")
     message("")
     message("Audio backends:")
     message("\tPipewire  : ${WIVRN_USE_PIPEWIRE}")

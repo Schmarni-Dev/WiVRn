@@ -65,6 +65,7 @@ add_executable(wivrn-server
 		avahi_publisher.cpp
 		hostname.cpp
 		main.cpp
+		sleep_inhibitor.cpp
 		start_application.cpp
 		target_instance_wivrn.cpp
 		wivrn_ipc.cpp
@@ -124,6 +125,14 @@ if(WIVRN_USE_VAAPI)
                         encoder/ffmpeg/ffmpeg_helper.cpp
                 )
         target_link_libraries(wivrn-server PRIVATE PkgConfig::LIBAV PkgConfig::LIBDRM)
+endif()
+
+if(WIVRN_USE_VULKAN_ENCODE)
+        target_sources(wivrn-server PRIVATE
+		encoder/video_encoder_vulkan.cpp
+		encoder/video_encoder_vulkan_h264.cpp
+		#encoder/video_encoder_vulkan_h265.cpp
+		)
 endif()
 
 if(WIVRN_USE_X264)

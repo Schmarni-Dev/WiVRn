@@ -199,3 +199,87 @@ const char * permission_name(feature f)
 	}
 	__builtin_unreachable();
 }
+
+std::string controller_name()
+{
+#ifndef __ANDROID__
+	const char * controller = std::getenv("WIVRN_CONTROLLER");
+	if (controller && strcmp(controller, ""))
+		return controller;
+#endif
+
+	switch (guess_model())
+	{
+		case model::oculus_quest:
+			return "oculus-touch-v2";
+		case model::oculus_quest_2:
+			return "oculus-touch-v3";
+		case model::meta_quest_pro:
+			return "meta-quest-touch-pro";
+		case model::meta_quest_3:
+			return "meta-quest-touch-plus";
+		case model::pico_neo_3:
+			return "pico-neo3";
+		case model::pico_4:
+			return "pico-4";
+		case model::htc_vive_focus_3:
+		case model::htc_vive_xr_elite:
+			return "htc-vive-focus-3";
+		case model::lynx_r1:
+		case model::unknown:
+			return "generic-trigger-squeeze";
+	}
+
+	__builtin_unreachable();
+}
+
+std::pair<glm::vec3, glm::quat> controller_offset(std::string_view profile, xr::spaces space)
+{
+	if (profile == "oculus-touch-v2")
+		switch (space)
+		{
+			case xr::spaces::grip_left:
+			case xr::spaces::grip_right:
+				return {{0, -0.006, -0.025}, glm::angleAxis(glm::radians(-15.f), glm::vec3{1, 0, 0})};
+
+			case xr::spaces::aim_left:
+				return {{-0.010, 0, 0.025}, {1, 0, 0, 0}};
+
+			case xr::spaces::aim_right:
+				return {{0.010, 0, 0.025}, {1, 0, 0, 0}};
+
+			default:
+				break;
+		}
+	else if (profile == "htc-vive-focus-3")
+		switch (space)
+		{
+			case xr::spaces::grip_left:
+			case xr::spaces::grip_right:
+				return {{0, 0.007, -0.030}, {1, 0, 0, 0}};
+
+			case xr::spaces::aim_left:
+			case xr::spaces::aim_right:
+				return {{0, -0.025, 0.005}, {1, 0, 0, 0}};
+
+			default:
+				break;
+		}
+
+	return {{0, 0, 0}, {1, 0, 0, 0}};
+}
+
+std::string controller_ray_model_name()
+{
+	switch (guess_model())
+	{
+		case model::htc_vive_focus_3:
+		case model::htc_vive_xr_elite:
+			// XR Elite's runtime always assume alpha is unpremultiplied in the composition layers
+			// Assume it's the same for all HTC headsets
+			return "ray-htc.gltf";
+
+		default:
+			return "ray.gltf";
+	}
+}

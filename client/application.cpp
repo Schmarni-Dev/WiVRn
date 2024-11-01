@@ -359,6 +359,28 @@ VkBool32 application::vulkan_debug_report_callback(
 	return VK_FALSE;
 }
 
+std::string parse_driver_sersion(const vk::PhysicalDeviceProperties & p)
+{
+	// See https://github.com/SaschaWillems/vulkan.gpuinfo.org/blob/1e6ca6e3c0763daabd6a101b860ab4354a07f5d3/functions.php#L294
+	switch (p.vendorID)
+	{
+		case 0x10de: // nvidia
+			return fmt::format(
+			        "{}.{}.{}.{}",
+			        (p.driverVersion >> 22) & 0x3ff,
+			        (p.driverVersion >> 14) & 0xff,
+			        (p.driverVersion >> 6) & 0xff,
+			        p.driverVersion & 0x3f);
+
+		default:
+			return fmt::format(
+			        "{}.{}.{}",
+			        VK_VERSION_MAJOR(p.driverVersion),
+			        VK_VERSION_MINOR(p.driverVersion),
+			        VK_VERSION_PATCH(p.driverVersion));
+	}
+}
+
 void application::initialize_vulkan()
 {
 	auto graphics_requirements = xr_system_id.graphics_requirements();
@@ -493,8 +515,10 @@ void application::initialize_vulkan()
 			vk_device_extensions.push_back(it->data());
 	}
 
-	vk::PhysicalDeviceProperties prop = vk_physical_device.getProperties();
-	spdlog::info("Initializing Vulkan with device {}", prop.deviceName.data());
+	spdlog::info("Initializing Vulkan with device {}", physical_device_properties.deviceName.data());
+	spdlog::info("    Vendor ID: 0x{:04x}", physical_device_properties.vendorID);
+	spdlog::info("    Device ID: 0x{:04x}", physical_device_properties.deviceID);
+	spdlog::info("    Driver version: {}", parse_driver_sersion(physical_device_properties));
 
 	std::vector<vk::QueueFamilyProperties> queue_properties = vk_physical_device.getQueueFamilyProperties();
 
@@ -756,6 +780,9 @@ void application::initialize()
 	opt_extensions.push_back(XR_HTC_PASSTHROUGH_EXTENSION_NAME);
 	opt_extensions.push_back(XR_FB_FACE_TRACKING2_EXTENSION_NAME);
 	opt_extensions.push_back(XR_EXT_PALM_POSE_EXTENSION_NAME);
+	opt_extensions.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	opt_extensions.push_back(XR_FB_COMPOSITION_LAYER_DEPTH_TEST_EXTENSION_NAME);
+	opt_extensions.push_back(XR_KHR_COMPOSITION_LAYER_COLOR_SCALE_BIAS_EXTENSION_NAME);
 
 	for (const auto & i: interaction_profiles)
 	{
@@ -795,7 +822,7 @@ void application::initialize()
 	spdlog::info("    Vendor ID: {:#x}", properties.vendorId);
 	spdlog::info("    System name: {}", properties.systemName);
 	spdlog::info("    Graphics properties:");
-	spdlog::info("        Maximum swapchain image size: {}x{}", properties.graphicsProperties.maxSwapchainImageWidth, properties.graphicsProperties.maxSwapchainImageWidth);
+	spdlog::info("        Maximum swapchain image size: {}x{}", properties.graphicsProperties.maxSwapchainImageWidth, properties.graphicsProperties.maxSwapchainImageHeight);
 	spdlog::info("        Maximum layer count: {}", properties.graphicsProperties.maxLayerCount);
 	spdlog::info("    Tracking properties:");
 	spdlog::info("        Orientation tracking: {}", (bool)properties.trackingProperties.orientationTracking);
@@ -946,6 +973,54 @@ std::pair<XrAction, XrActionType> application::get_action(const std::string & re
 	return {};
 }
 
+#ifdef __ANDROID__
+extern "C" __attribute__((visibility("default"))) void Java_org_meumeu_wivrn_MainActivity_onNewIntent(JNIEnv * env, jobject instance, jobject intent_obj)
+{
+	jni::jni_thread::setup_thread(env);
+	jni::object<"android/content/Intent"> intent{intent_obj};
+
+	if (auto data_string = intent.call<jni::string>("getDataString"))
+	{
+		spdlog::info("Received intent {}", (std::string)data_string);
+		application::instance().set_server_uri(data_string);
+	}
+}
+#endif
+
+void application::set_server_uri(std::string uri)
+{
+	std::string server_address;
+	bool server_tcp_only = false;
+
+	if (uri.starts_with("wivrn://"))
+	{
+		server_address = uri.substr(strlen("wivrn://"));
+	}
+	else if (uri.starts_with("wivrn+tcp://"))
+	{
+		server_address = uri.substr(strlen("wivrn+tcp://"));
+		server_tcp_only = true;
+	}
+
+	auto colon = server_address.rfind(":");
+	int port = wivrn::default_port;
+	if (colon != std::string::npos)
+	{
+		port = std::stoi(server_address.substr(colon + 1));
+		server_address = server_address.substr(0, colon);
+	}
+
+	{
+		std::unique_lock _{server_intent_mutex};
+		server_intent = wivrn_discover::service{
+		        .name = "",
+		        .hostname = server_address,
+		        .port = port,
+		        .tcp_only = server_tcp_only,
+		};
+	}
+}
+
 application::application(application_info info) :
         app_info(std::move(info))
 
@@ -961,21 +1036,10 @@ application::application(application_info info) :
 
 		// Get the intent, to handle wivrn://uri
 		auto intent = act.call<jni::object<"android/content/Intent">>("getIntent");
-		std::string data_string;
-		if (auto data_string_jni = intent.call<jni::string>("getDataString"))
+		if (auto data_string = intent.call<jni::string>("getDataString"))
 		{
-			data_string = data_string_jni;
-		}
-
-		if (data_string.starts_with("wivrn://"))
-		{
-			server_address = data_string.substr(strlen("wivrn://"));
-		}
-
-		if (data_string.starts_with("wivrn+tcp://"))
-		{
-			server_address = data_string.substr(strlen("wivrn+tcp://"));
-			server_tcp_only = true;
+			spdlog::info("Started with intent {}", (std::string)data_string);
+			set_server_uri(data_string);
 		}
 
 		auto files_dir = ctx.call<jni::object<"java/io/File">>("getFilesDir");

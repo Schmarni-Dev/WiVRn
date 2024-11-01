@@ -38,6 +38,10 @@
 #if WIVRN_USE_X264
 #include "video_encoder_x264.h"
 #endif
+#if WIVRN_USE_VULKAN_ENCODE
+#include "video_encoder_vulkan_h264.h"
+// #include "video_encoder_vulkan_h265.h"
+#endif
 
 namespace wivrn
 {
@@ -106,6 +110,27 @@ std::unique_ptr<VideoEncoder> VideoEncoder::Create(
 {
 	using namespace std::string_literals;
 	std::unique_ptr<VideoEncoder> res;
+	settings.range = VK_SAMPLER_YCBCR_RANGE_ITU_FULL;
+	settings.color_model = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
+	if (settings.encoder_name == encoder_vulkan)
+	{
+#if WIVRN_USE_VULKAN_ENCODE
+		switch (settings.codec)
+		{
+			case video_codec::h264:
+				res = video_encoder_vulkan_h264::create(wivrn_vk, settings, fps);
+				break;
+			case video_codec::h265:
+				throw std::runtime_error("h265 not supported for vulkan video encode");
+				// res = video_encoder_vulkan_h265::create(wivrn_vk, settings, fps);
+				// break;
+			case video_codec::av1:
+				throw std::runtime_error("av1 not supported for vulkan video encode");
+		}
+#else
+		throw std::runtime_error("Vulkan video encode not enabled");
+#endif
+	}
 	if (settings.encoder_name == encoder_x264)
 	{
 #if WIVRN_USE_X264
@@ -156,6 +181,32 @@ std::unique_ptr<VideoEncoder> VideoEncoder::Create(
 	return res;
 }
 
+#if WIVRN_USE_VULKAN_ENCODE
+std::pair<std::vector<vk::VideoProfileInfoKHR>, vk::ImageUsageFlags> VideoEncoder::get_create_image_info(const std::vector<encoder_settings> & settings)
+{
+	std::pair<std::vector<vk::VideoProfileInfoKHR>, vk::ImageUsageFlags> result;
+	for (const auto & item: settings)
+	{
+		if (item.encoder_name == encoder_vulkan)
+		{
+			result.second |= vk::ImageUsageFlagBits::eVideoEncodeSrcKHR;
+			switch (item.codec)
+			{
+				case h264:
+					result.first.push_back(video_encoder_vulkan_h264::video_profile_info.get());
+					break;
+				case h265:
+					// result.first.push_back(video_encoder_vulkan_h265::video_profile_info.get());
+					break;
+				case av1:
+					throw std::runtime_error("av1 not supported for vulkan video encode");
+			}
+		}
+	}
+	return result;
+}
+#endif
+
 static const uint64_t idr_throttle = 100;
 
 VideoEncoder::VideoEncoder(bool async_send) :
@@ -169,12 +220,18 @@ VideoEncoder::~VideoEncoder()
 		shared_sender->wait_idle(this);
 }
 
-void VideoEncoder::SyncNeeded()
+void VideoEncoder::on_feedback(const from_headset::feedback & feedback)
+{
+	if (not feedback.sent_to_decoder)
+		sync_needed = true;
+}
+
+void VideoEncoder::reset()
 {
 	sync_needed = true;
 }
 
-void VideoEncoder::PresentImage(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf)
+void VideoEncoder::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf)
 {
 	// Wait for encoder to be done
 	busy[next_present].wait(true);
@@ -182,6 +239,11 @@ void VideoEncoder::PresentImage(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_
 	busy[next_present] = true;
 	present_image(y_cbcr, cmd_buf, next_present);
 	next_present = (next_present + 1) % num_slots;
+}
+
+void VideoEncoder::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & video_cmd_buf, vk::Fence fence, uint64_t frame_index)
+{
+	present_image(y_cbcr, video_cmd_buf, fence, next_present, frame_index);
 }
 
 void VideoEncoder::Encode(wivrn_session & cnx,

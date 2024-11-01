@@ -24,6 +24,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
+#include <map>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -43,10 +44,11 @@ struct pipeline_info
 	vk::FrontFace front_face = vk::FrontFace::eClockwise;
 	vk::PrimitiveTopology topology = vk::PrimitiveTopology::eTriangleList;
 	bool blend_enable = false;
+	bool depth_test_enable = true;
+	bool depth_write_enable = true;
 
 	// Specialization constants data
 	int32_t nb_texcoords = 2;
-	int32_t nb_clipping = 1;
 	VkBool32 dithering = true;
 	VkBool32 alpha_cutout = false;
 	VkBool32 skinning = false;
@@ -82,12 +84,12 @@ class scene_renderer
 		image_allocation depth_buffer;
 		vk::raii::ImageView depth_view = nullptr;
 
-		image_allocation multisample_image;
-		vk::raii::ImageView multisample_view = nullptr;
+		// image_allocation multisample_image;
+		// vk::raii::ImageView multisample_view = nullptr;
 	};
 
 	// Initialization functions
-	output_image create_output_image_data(vk::Image output);
+	output_image create_output_image_data(vk::Image output_color, vk::Image output_depth);
 	vk::raii::RenderPass create_renderpass();
 	vk::raii::PipelineLayout create_pipeline_layout(std::span<vk::DescriptorSetLayout> layouts);
 	vk::raii::Pipeline create_pipeline(const pipeline_info & info);
@@ -97,10 +99,10 @@ class scene_renderer
 	vk::raii::DescriptorSetLayout create_descriptor_set_layout(std::span<vk::DescriptorSetLayoutBinding> bindings, vk::DescriptorSetLayoutCreateFlags flags = {});
 
 	// Caches
-	std::unordered_map<VkImage, output_image> output_images;
+	std::/*unordered_*/ map<std::pair<VkImage, VkImage>, output_image> output_images; // TODO: use an unordered_map, create a hash for std::pair
 	std::unordered_map<pipeline_info, vk::raii::Pipeline> pipelines;
 
-	output_image & get_output_image_data(vk::Image output);
+	output_image & get_output_image_data(vk::Image output_color, vk::Image output_depth);
 	vk::raii::Pipeline & get_pipeline(const pipeline_info & info);
 
 	vk::raii::DescriptorSetLayout layout_0; // Descriptor set 0: per-frame/view data (UBO) and per-instance data (UBO + SSBO)
@@ -148,6 +150,7 @@ class scene_renderer
 		glm::mat4 model;
 		glm::mat4 modelview;
 		glm::mat4 modelviewproj;
+		std::array<glm::vec4, 4> clipping_planes;
 	};
 
 	struct per_frame_resources
@@ -167,12 +170,22 @@ class scene_renderer
 	int current_frame_index;
 	vk::raii::QueryPool query_pool = nullptr;
 	double gpu_time_s = 0;
+	bool keep_depth_buffer = false;
 
 	per_frame_resources & current_frame();
 
 	void update_material_descriptor_set(scene_data::material & material);
 
 public:
+	static vk::Format find_usable_image_format(
+	        vk::raii::PhysicalDevice physical_device,
+	        std::span<const vk::Format> formats,
+	        vk::Extent3D min_extent,
+	        vk::ImageUsageFlags usage,
+	        vk::ImageType type = vk::ImageType::e2D,
+	        vk::ImageTiling tiling = vk::ImageTiling::eOptimal,
+	        vk::ImageCreateFlags flags = {});
+
 	scene_renderer(
 	        vk::raii::Device & device,
 	        vk::raii::PhysicalDevice physical_device,
@@ -180,14 +193,16 @@ public:
 	        vk::raii::CommandPool & cb_pool,
 	        vk::Extent2D output_size,
 	        vk::Format output_format,
-	        std::span<vk::Format> depth_formats,
-	        int frames_in_flight = 2);
+	        vk::Format depth_format,
+	        int frames_in_flight = 2,
+	        bool keep_depth_buffer = false);
 
 	~scene_renderer();
 
 	struct frame_info
 	{
 		vk::Image destination;
+		vk::Image depth_buffer;
 		glm::mat4 projection;
 		glm::mat4 view;
 	};

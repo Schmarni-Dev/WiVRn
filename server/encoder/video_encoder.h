@@ -20,6 +20,7 @@
 #pragma once
 
 #include "driver/clock_offset.h"
+#include "wivrn_config.h"
 #include "wivrn_packets.h"
 
 #include <atomic>
@@ -42,6 +43,7 @@ class wivrn_session;
 inline const char * encoder_nvenc = "nvenc";
 inline const char * encoder_vaapi = "vaapi";
 inline const char * encoder_x264 = "x264";
+inline const char * encoder_vulkan = "vulkan";
 
 class VideoEncoder
 {
@@ -104,13 +106,19 @@ public:
 	        int input_height,
 	        float fps);
 
+#if WIVRN_USE_VULKAN_ENCODE
+	static std::pair<std::vector<vk::VideoProfileInfoKHR>, vk::ImageUsageFlags> get_create_image_info(const std::vector<encoder_settings> &);
+#endif
+
 	VideoEncoder(bool async_send = false);
 	virtual ~VideoEncoder();
 
-	void PresentImage(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf);
+	void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf);
+	// for vulkan video (command buffer is on a video queue)
+	void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf, vk::Fence fence, uint64_t frame_index);
 
-	// The other end lost a frame and needs to resynchronize
-	void SyncNeeded();
+	virtual void on_feedback(const from_headset::feedback &);
+	virtual void reset();
 
 	void Encode(wivrn_session & cnx,
 	            const to_headset::video_stream_data_shard::view_info_t & view_info,
@@ -118,7 +126,9 @@ public:
 
 protected:
 	// called on present to submit command buffers for the image.
-	virtual void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf, uint8_t slot) = 0;
+	virtual void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf, uint8_t slot) {};
+	// for vulkan video (command buffer is on a video queue)
+	virtual void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf, vk::Fence, uint8_t slot, uint64_t frame_index) {};
 	// called when command buffer finished executing
 	virtual std::optional<data> encode(bool idr, std::chrono::steady_clock::time_point target_timestamp, uint8_t slot) = 0;
 
