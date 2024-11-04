@@ -797,13 +797,15 @@ void wivrn_comp_target::on_feedback(const from_headset::feedback & feedback, con
 	if (not o)
 		return;
 	uint8_t stream = feedback.stream_index % 128;
-	pacer.on_feedback(feedback, o);
 	if (psc.status & 1)
 		return;
 	if (encoders.size() <= stream)
 		return;
 	if (feedback.stream_index == stream)
+	{
 		encoders[stream].yuv->on_feedback(feedback);
+		pacer.on_feedback(feedback, o);
+	}
 	else
 		encoders[stream].alpha->on_feedback(feedback);
 }
