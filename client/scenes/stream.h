@@ -62,7 +62,7 @@ private:
 		std::array<std::shared_ptr<wivrn::shard_accumulator::blit_handle>, image_buffer_size> latest_frames;
 		bool alpha;
 
-		std::shared_ptr<wivrn::shard_accumulator::blit_handle> frame(std::optional<uint64_t> id) const;
+		std::shared_ptr<wivrn::shard_accumulator::blit_handle> frame(uint64_t id) const;
 		std::vector<uint64_t> frames() const;
 	};
 

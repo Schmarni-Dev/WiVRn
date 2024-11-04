@@ -303,10 +303,10 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 	std::unique_lock lock(frames_mutex);
 	thread_local std::vector<shard_accumulator::blit_handle *> common_frames;
 	common_frames.clear();
+	const bool alpha = decoders[0].latest_frames[0] and decoders[0].latest_frames[0]->view_info.alpha;
 	for (size_t i = 0; i < decoders.size(); ++i)
 	{
-		// Don't consider alpha channel
-		if (decoders[i].alpha)
+		if (decoders[i].alpha and not alpha)
 			continue;
 		if (i == 0)
 		{
@@ -330,7 +330,8 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 			// clang-format on
 		}
 	}
-	std::optional<uint64_t> frame_index;
+	std::vector<std::shared_ptr<shard_accumulator::blit_handle>> result;
+	result.reserve(decoders.size());
 	if (not common_frames.empty())
 	{
 		auto min = std::ranges::min_element(common_frames,
@@ -342,7 +343,14 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 		                                    });
 
 		assert(*min);
-		frame_index = (*min)->feedback.frame_index;
+		auto frame_index = (*min)->feedback.frame_index;
+		for (const auto & decoder: decoders)
+		{
+			if (alpha or not decoder.alpha)
+				result.emplace_back(decoder.frame(frame_index));
+			else
+				result.emplace_back(nullptr);
+		}
 	}
 	else
 	{
@@ -359,31 +367,35 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 			}
 			spdlog::warn(frames);
 		}
-	}
-	std::vector<std::shared_ptr<shard_accumulator::blit_handle>> result;
-	result.reserve(decoders.size());
-	bool alpha = false;
-	for (const auto & decoder: decoders)
-	{
-		if (alpha or not decoder.alpha)
+
+		for (const auto & decoder: decoders)
 		{
-			const auto & bh = result.emplace_back(decoder.frame(frame_index));
-			alpha |= bh and bh->view_info.alpha;
+			if (alpha or not decoder.alpha)
+			{
+				auto min = std::ranges::min_element(decoder.latest_frames,
+				                                    std::ranges::less{},
+				                                    [display_time](auto frame) {
+					                                    if (not frame)
+						                                    return std::numeric_limits<XrTime>::max();
+					                                    return std::abs(frame->view_info.display_time - display_time);
+				                                    });
+				result.emplace_back(*min);
+			}
+			else
+				result.emplace_back(nullptr);
 		}
-		else
-			result.emplace_back(nullptr);
 	}
 	return result;
 }
 
-std::shared_ptr<shard_accumulator::blit_handle> scenes::stream::accumulator_images::frame(std::optional<uint64_t> id) const
+std::shared_ptr<shard_accumulator::blit_handle> scenes::stream::accumulator_images::frame(uint64_t id) const
 {
 	for (auto it = latest_frames.rbegin(); it != latest_frames.rend(); ++it)
 	{
 		if (not *it)
 			continue;
 
-		if (id and (*it)->feedback.frame_index != *id)
+		if ((*it)->feedback.frame_index != id)
 			continue;
 
 		return *it;
