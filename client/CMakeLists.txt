@@ -66,7 +66,6 @@ endif()
 ##############################################################################
 # Main sources
 #
-target_compile_features(wivrn PRIVATE cxx_std_23)
 target_compile_definitions(wivrn PRIVATE "XR_USE_TIMESPEC=1")
 
 set_target_properties(wivrn PROPERTIES CXX_VISIBILITY_PRESET hidden)
@@ -208,7 +207,7 @@ foreach(PO_DIR IN LISTS PO_DIRS)
 endforeach()
 
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/glyph_set.cpp
-    COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/../tools/extract_charset.py ${PO_FILES} > ${CMAKE_CURRENT_BINARY_DIR}/glyph_set.cpp
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/extract_charset.py ${PO_FILES} > ${CMAKE_CURRENT_BINARY_DIR}/glyph_set.cpp
     DEPENDS ${PO_FILES})
 
 add_custom_target(translations ALL DEPENDS ${MO_FILES} ${CMAKE_CURRENT_BINARY_DIR}/glyph_set.cpp)
@@ -248,7 +247,7 @@ set(IMG_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../images)
 set(AST_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../assets)
 
 add_custom_command(OUTPUT ${ASSETS_DIR}/wivrn.png
-    COMMAND rsvg-convert ${IMG_SRC_DIR}/wivrn.svg -w 540 -h 540 -o ${ASSETS_DIR}/wivrn.png ${RSVG_OPTS}
+    COMMAND ${RSVG_CONVERT} ${IMG_SRC_DIR}/wivrn.svg -w 540 -h 540 -o ${ASSETS_DIR}/wivrn.png ${RSVG_OPTS}
     DEPENDS ${IMG_SRC_DIR}/wivrn.svg ${WIVRN_CSS_ABS})
 
 add_custom_target(assets ALL DEPENDS
@@ -258,12 +257,13 @@ add_custom_target(assets ALL DEPENDS
 add_dependencies(wivrn assets)
 
 if(ANDROID)
+    find_program(TOKTX toktx REQUIRED)
     add_custom_command(OUTPUT ${ASSETS_DIR}/wivrn.ktx2
-        COMMAND toktx --encode astc --astc_blk_d 4x4 --astc_quality 100 --genmipmap ${ASSETS_DIR}/wivrn.ktx2 ${ASSETS_DIR}/wivrn.png
+        COMMAND ${TOKTX} --encode astc --astc_blk_d 4x4 --astc_quality 100 --genmipmap ${ASSETS_DIR}/wivrn.ktx2 ${ASSETS_DIR}/wivrn.png
         DEPENDS ${ASSETS_DIR}/wivrn.png)
 
     add_custom_command(OUTPUT ${ASSETS_DIR}/WoodFloor051_1K-JPG_Color.ktx2
-        COMMAND toktx --encode astc --astc_blk_d 12x12 --astc_quality 100 --genmipmap ${ASSETS_DIR}/WoodFloor051_1K-JPG_Color.ktx2 ${AST_SRC_DIR}/WoodFloor051_1K-JPG_Color.jpg
+        COMMAND ${TOKTX} --encode astc --astc_blk_d 12x12 --astc_quality 100 --genmipmap ${ASSETS_DIR}/WoodFloor051_1K-JPG_Color.ktx2 ${AST_SRC_DIR}/WoodFloor051_1K-JPG_Color.jpg
         DEPENDS ${AST_SRC_DIR}/WoodFloor051_1K-JPG_Color.jpg)
 
     add_custom_command(OUTPUT ${ASSETS_DIR}/vr_splash.png

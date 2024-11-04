@@ -135,11 +135,6 @@ settings::settings(wivrn_server * server_interface) :
 	connect(ui->combo_select_game, &QComboBox::currentIndexChanged, this, &settings::on_selected_game_changed);
 	connect(ui->button_game_browse, &QPushButton::clicked, this, &settings::on_browse_game);
 
-	// Use a queued connection so that the slot is called after the widgets have been laid out
-	connect(ui->radio_manual_encoder, &QRadioButton::toggled, this, [&](bool value) {
-		if (value)
-			ui->scrollArea->ensureWidgetVisible(ui->layout_encoder_config); }, Qt::QueuedConnection);
-
 	connect(ui->partitionner, &rectangle_partitionner::selected_index_change, this, &settings::selected_rectangle_changed);
 
 	connect(ui->encoder, &QComboBox::currentIndexChanged, this, &settings::on_selected_encoder_changed);
@@ -154,7 +149,13 @@ settings::settings(wivrn_server * server_interface) :
 	fill_steam_games_list();
 	load_settings();
 
-	auto encoders = qobject_cast<QStandardItemModel *>(ui->encoder->model());
+	// Use a queued connection so that the slot is called after the widgets have been laid out
+	// Set up the signal connection after loading to avoid scrolling when opening the window
+	connect(ui->radio_manual_encoder, &QRadioButton::toggled, this, [&](bool value) {
+		if (value)
+			ui->scrollArea->ensureWidgetVisible(ui->layout_encoder_config); }, Qt::QueuedConnection);
+
+	auto encoders = dynamic_cast<QStandardItemModel *>(ui->encoder->model());
 #if !WIVRN_USE_NVENC
 	encoders->item(1)->setEnabled(false);
 #endif
@@ -227,7 +228,7 @@ void settings::on_selected_encoder_changed()
 {
 	int encoder = ui->encoder->currentIndex();
 
-	QStandardItemModel * model = qobject_cast<QStandardItemModel *>(ui->codec->model());
+	QStandardItemModel * model = dynamic_cast<QStandardItemModel *>(ui->codec->model());
 	assert(model);
 
 	for (int i = 0, n = model->rowCount(); i < n; i++)

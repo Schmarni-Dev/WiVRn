@@ -33,7 +33,7 @@ Bitrate of the video, in bit/s. Split among decoders based on size and codecs.
 ## `encoders`
 A list of encoders to use.
 
-Default value: single encoder.
+Default value: 3 encoders in order 1/8th, 3/8th and 4/8th of the image.
 
 WiVRn has the ability to split the video in blocks that are processed independently, this may use resources more effectively and reduce latency.
 All the provided encoders are put into groups, groups are executed concurrently and items within a group are processed sequentially.
@@ -48,7 +48,7 @@ Identifier of the encoder, one of
 * `vulkan`: experimental, for any GPU that supports vulkan video encode
 
 ### `codec`
-Default value: `av1` if supported by both headset and hardware encoder, else `h265`.
+Default value: first supported by both headset and encoder of `av1`, `h264`, `h265`.
 
 One of `h264`, `h265` or `av1`.
 Not all encoders support every codec, `x264` and `vulkan` only support `h264`, `nvenc` only `h264` and `h265`

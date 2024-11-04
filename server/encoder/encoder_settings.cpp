@@ -35,6 +35,7 @@
 #endif
 #if WIVRN_USE_VAAPI
 #include "ffmpeg/video_encoder_va.h"
+#include <libavutil/ffversion.h>
 #endif
 
 namespace wivrn
@@ -42,7 +43,7 @@ namespace wivrn
 // TODO: size independent bitrate
 static const uint64_t default_bitrate = 50'000'000;
 
-// #define WIVRN_SPLIT_ENCODERS 1
+#define WIVRN_SPLIT_ENCODERS 1
 
 static bool is_nvidia(vk::PhysicalDevice physical_device)
 {
@@ -101,7 +102,7 @@ static void check_scale(std::string_view encoder_name, video_codec codec, uint16
 #if WIVRN_USE_NVENC
 	if (encoder_name == encoder_nvenc)
 	{
-		auto max = VideoEncoderNvenc::get_max_size(codec);
+		auto max = video_encoder_nvenc::get_max_size(codec);
 		if (width * scale[0] > max[0])
 		{
 			scale[0] = double(max[0] - 1) / width;
@@ -117,9 +118,24 @@ static void check_scale(std::string_view encoder_name, video_codec codec, uint16
 }
 
 #if WIVRN_USE_VAAPI
+
+static constexpr auto ffmpeg_version()
+{
+	std::array<int, 3> result;
+	std::string_view version = FFMPEG_VERSION;
+	for (auto & item: result)
+	{
+		auto dot = version.find(".");
+		auto number = version.substr(0, dot);
+		version = version.substr(dot + 1);
+		std::from_chars(number.begin(), number.end(), item);
+	}
+	return result;
+}
+
 static std::optional<wivrn::video_codec> filter_codecs_vaapi(wivrn_vk_bundle & bundle, const std::vector<wivrn::video_codec> & codecs)
 {
-	VideoEncoderFFMPEG::mute_logs mute;
+	video_encoder_ffmpeg::mute_logs mute;
 	encoder_settings s{
 	        {
 	                .width = 800,
@@ -132,10 +148,18 @@ static std::optional<wivrn::video_codec> filter_codecs_vaapi(wivrn_vk_bundle & b
 	};
 	for (auto codec: codecs)
 	{
+		if constexpr (ffmpeg_version()[0] < 6)
+		{
+			if (codec == wivrn::video_codec::h264)
+			{
+				U_LOG_W("Skip h264 on ffmpeg < 6 due to poor performance");
+				continue;
+			}
+		}
 		try
 		{
 			s.codec = codec;
-			video_encoder_va test(bundle, s, 60);
+			video_encoder_va test(bundle, s, 60, 0, 0);
 			return codec;
 		}
 		catch (...)
@@ -240,7 +264,7 @@ static std::vector<configuration::encoder> get_encoder_default_settings(wivrn_vk
 		                .codec = base.codec,
 		        },
 		        {
-		                .name = encoder_vaapi,
+		                .name = base.name,
 		                .width = 0.5,
 		                .offset_x = 0.5,
 		                .group = 0,

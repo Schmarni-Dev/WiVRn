@@ -85,7 +85,7 @@ decoder::decoder(
         uint8_t stream_index,
         std::weak_ptr<scenes::stream> weak_scene,
         shard_accumulator * accumulator) :
-        description(description), fps(fps), device(device), weak_scene(weak_scene), accumulator(accumulator)
+        description(description), stream_index(stream_index), fps(fps), device(device), weak_scene(weak_scene), accumulator(accumulator)
 {
 	spdlog::info("hbm_mutex.native_handle() = {}", (void *)hbm_mutex.native_handle());
 
@@ -372,7 +372,7 @@ void decoder::create_sampler(const AHardwareBuffer_Desc & buffer_desc, vk::Andro
 	        },
 	};
 
-	ycbcr_sampler = vk::raii::Sampler(device, sampler_info.get<vk::SamplerCreateInfo>());
+	ycbcr_sampler = vk::raii::Sampler(device, sampler_info.get());
 }
 
 std::shared_ptr<decoder::mapped_hardware_buffer> decoder::map_hardware_buffer(AImage * image)
@@ -537,8 +537,15 @@ static bool hardware_accelerated(AMediaCodec * media_codec)
 std::vector<wivrn::video_codec> decoder::supported_codecs()
 {
 	std::vector<wivrn::video_codec> result;
+	// Make sure we update this code when codecs are changed
+	static_assert(magic_enum::enum_count<wivrn::video_codec>() == 3);
 
-	for (auto codec: std::ranges::reverse_view(magic_enum::enum_values<wivrn::video_codec>()))
+	// In order or preference, from preferred to least preferred
+	for (auto codec: {
+	             wivrn::video_codec::av1,
+	             wivrn::video_codec::h264,
+	             wivrn::video_codec::h265,
+	     })
 	{
 		AMediaCodec_ptr media_codec(AMediaCodec_createDecoderByType(mime(codec)));
 

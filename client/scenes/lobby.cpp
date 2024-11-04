@@ -28,7 +28,7 @@
 #include "render/scene_data.h"
 #include "render/scene_renderer.h"
 #include "stream.h"
-#include "utils/contains.h"
+#include "utils/overloaded.h"
 #include "version.h"
 #include "wivrn_client.h"
 #include "wivrn_packets.h"
@@ -574,17 +574,6 @@ static std::vector<XrCompositionLayerProjectionView> render_layer(std::vector<Xr
 	return std::get<0>(render_layer(views, color_swapchains, depth_swapchains, renderer, data, clear_color));
 }
 
-namespace
-{
-template <class... Ts>
-struct overloaded : Ts...
-{
-	using Ts::operator()...;
-};
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
-} // namespace
-
 // Return the vector v such that dot(v, x) > 0 iff x is on the side where the composition layer is visible
 static glm::vec4 compute_ray_limits(const XrPosef & pose, float margin = 0)
 {
@@ -874,7 +863,7 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 	if (application::get_config().passthrough_enabled)
 	{
 		std::visit(
-		        overloaded{
+		        utils::overloaded{
 		                [&](std::monostate &) {
 			                assert(false);
 		                },
@@ -884,7 +873,7 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 		                [&](auto & p) {
 			                layers_with_z_index.emplace_back(constants::lobby::zindex_passthrough, p.layer());
 		                }},
-		        passthrough);
+		        session.get_passthrough());
 	}
 
 	// Dimming settings if a popup window is displayed
@@ -1120,27 +1109,10 @@ void scenes::lobby::on_focused()
 
 void scenes::lobby::setup_passthrough()
 {
-	auto & passthrough_enabled = application::get_config().passthrough_enabled;
-	if (not passthrough_enabled)
-	{
-		passthrough.emplace<std::monostate>();
-		return;
-	}
-	if (passthrough_supported != xr::system::passthrough_type::no_passthrough)
-	{
-		if (utils::contains(system.environment_blend_modes(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO), XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND))
-		{
-			passthrough.emplace<xr::passthrough_alpha_blend>();
-		}
-		else if (utils::contains(application::get_xr_extensions(), XR_FB_PASSTHROUGH_EXTENSION_NAME))
-		{
-			passthrough.emplace<xr::passthrough_fb>(instance, session);
-		}
-		else if (utils::contains(application::get_xr_extensions(), XR_HTC_PASSTHROUGH_EXTENSION_NAME))
-		{
-			passthrough.emplace<xr::passthrough_htc>(instance, session);
-		}
-	}
+	if (application::get_config().passthrough_enabled)
+		session.enable_passthrough(system);
+	else
+		session.disable_passthrough();
 }
 
 void scenes::lobby::on_unfocused()
@@ -1164,7 +1136,7 @@ void scenes::lobby::on_unfocused()
 	swapchains_lobby_depth.clear();
 	swapchains_controllers_depth.clear();
 	swapchain_imgui = xr::swapchain();
-	passthrough.emplace<std::monostate>();
+	session.disable_passthrough();
 	multicast.reset();
 }
 

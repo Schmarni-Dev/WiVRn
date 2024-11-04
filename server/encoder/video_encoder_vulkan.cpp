@@ -51,8 +51,8 @@ vk::VideoFormatPropertiesKHR wivrn::video_encoder_vulkan::select_video_format(
 	throw std::runtime_error("No suitable image format found");
 }
 
-wivrn::video_encoder_vulkan::video_encoder_vulkan(wivrn_vk_bundle & vk, vk::Rect2D rect, vk::VideoEncodeCapabilitiesKHR in_encode_caps, float fps, uint64_t bitrate) :
-        VideoEncoder(true), vk(vk), encode_caps(patch_capabilities(in_encode_caps)), rect(rect), fps(fps)
+wivrn::video_encoder_vulkan::video_encoder_vulkan(wivrn_vk_bundle & vk, vk::Rect2D rect, vk::VideoEncodeCapabilitiesKHR in_encode_caps, float fps, uint8_t stream_idx, uint8_t image_layer, uint64_t bitrate) :
+        video_encoder(stream_idx, image_layer, true), vk(vk), encode_caps(patch_capabilities(in_encode_caps)), rect(rect), fps(fps)
 {
 	// Initialize Rate control
 	U_LOG_D("Supported rate control modes: %s", vk::to_string(encode_caps.rateControlModes).c_str());
@@ -227,7 +227,7 @@ void wivrn::video_encoder_vulkan::init(const vk::VideoCapabilitiesKHR & video_ca
 	        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
 	                             .baseMipLevel = 0,
 	                             .levelCount = 1,
-	                             .baseArrayLayer = 0,
+	                             .baseArrayLayer = image_layer,
 	                             .layerCount = 1},
 	};
 
@@ -320,7 +320,7 @@ std::vector<uint8_t> wivrn::video_encoder_vulkan::get_encoded_parameters(void * 
 	return encoded;
 }
 
-std::optional<wivrn::VideoEncoder::data> wivrn::video_encoder_vulkan::encode(bool idr, std::chrono::steady_clock::time_point target_timestamp, uint8_t encode_slot)
+std::optional<wivrn::video_encoder::data> wivrn::video_encoder_vulkan::encode(bool idr, std::chrono::steady_clock::time_point target_timestamp, uint8_t encode_slot)
 {
 	if (idr)
 		send_idr_data();
