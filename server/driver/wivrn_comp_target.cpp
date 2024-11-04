@@ -161,9 +161,11 @@ static void create_encoders(wivrn_comp_target * cn)
 	for (auto & settings: cn->settings)
 	{
 		uint8_t stream_index = cn->encoders.size();
+		auto alpha_settings = settings;
+		alpha_settings.bitrate /= 10;
 		auto & encoder = cn->encoders.emplace_back(
 		        video_encoder::create(*cn->wivrn_bundle, settings, stream_index, 0, desc.width, desc.height, desc.fps),
-		        video_encoder::create(*cn->wivrn_bundle, settings, stream_index + 128, 1, desc.width, desc.height, desc.fps));
+		        video_encoder::create(*cn->wivrn_bundle, alpha_settings, stream_index + 128, 1, desc.width, desc.height, desc.fps));
 		desc.items.push_back(settings);
 
 		thread_params[settings.group].emplace_back(encoder.yuv);
