@@ -660,6 +660,8 @@ static VkResult comp_wivrn_present(struct comp_target * ct,
 	auto & view_info = cn->psc.view_info;
 	view_info.foveation = cn->cnx.get_foveation_parameters();
 	view_info.display_time = cn->cnx.get_offset().to_headset(info.predicted_display_time);
+	if (view_info.alpha != do_alpha)
+		cn->pacer.reset();
 	view_info.alpha = do_alpha;
 	for (int eye = 0; eye < 2; ++eye)
 	{
@@ -797,8 +799,7 @@ void wivrn_comp_target::on_feedback(const from_headset::feedback & feedback, con
 	if (encoders.size() <= stream)
 		return;
 	encoders[stream]->on_feedback(feedback);
-	if (encoders[stream]->channels == to_headset::video_stream_description::channels_t::colour)
-		pacer.on_feedback(feedback, o);
+	pacer.on_feedback(feedback, o);
 }
 
 void wivrn_comp_target::reset_encoders()
