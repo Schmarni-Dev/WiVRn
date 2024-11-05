@@ -104,7 +104,6 @@ std::unique_ptr<video_encoder> video_encoder::create(
         wivrn_vk_bundle & wivrn_vk,
         encoder_settings & settings,
         uint8_t stream_idx,
-        uint8_t image_layer,
         int input_width,
         int input_height,
         float fps)
@@ -119,7 +118,7 @@ std::unique_ptr<video_encoder> video_encoder::create(
 		switch (settings.codec)
 		{
 			case video_codec::h264:
-				res = video_encoder_vulkan_h264::create(wivrn_vk, settings, fps, stream_idx, image_layer);
+				res = video_encoder_vulkan_h264::create(wivrn_vk, settings, fps, stream_idx);
 				break;
 			case video_codec::h265:
 				throw std::runtime_error("h265 not supported for vulkan video encode");
@@ -135,7 +134,7 @@ std::unique_ptr<video_encoder> video_encoder::create(
 	if (settings.encoder_name == encoder_x264)
 	{
 #if WIVRN_USE_X264
-		res = std::make_unique<video_encoder_x264>(wivrn_vk, settings, fps, stream_idx, image_layer);
+		res = std::make_unique<video_encoder_x264>(wivrn_vk, settings, fps, stream_idx);
 #else
 		throw std::runtime_error("x264 encoder not enabled");
 #endif
@@ -143,7 +142,7 @@ std::unique_ptr<video_encoder> video_encoder::create(
 	if (settings.encoder_name == encoder_nvenc)
 	{
 #if WIVRN_USE_NVENC
-		res = std::make_unique<video_encoder_nvenc>(wivrn_vk, settings, fps, stream_idx, image_layer);
+		res = std::make_unique<video_encoder_nvenc>(wivrn_vk, settings, fps, stream_idx);
 #else
 		throw std::runtime_error("nvenc support not enabled");
 #endif
@@ -151,7 +150,7 @@ std::unique_ptr<video_encoder> video_encoder::create(
 	if (settings.encoder_name == encoder_vaapi)
 	{
 #if WIVRN_USE_VAAPI
-		res = std::make_unique<video_encoder_va>(wivrn_vk, settings, fps, stream_idx, image_layer);
+		res = std::make_unique<video_encoder_va>(wivrn_vk, settings, fps, stream_idx);
 #else
 		throw std::runtime_error("vaapi support not enabled");
 #endif
@@ -209,9 +208,9 @@ std::pair<std::vector<vk::VideoProfileInfoKHR>, vk::ImageUsageFlags> video_encod
 
 static const uint64_t idr_throttle = 100;
 
-video_encoder::video_encoder(uint8_t stream_idx, uint8_t image_layer, bool async_send) :
+video_encoder::video_encoder(uint8_t stream_idx, to_headset::video_stream_description::channels_t channels, bool async_send) :
         stream_idx(stream_idx),
-        image_layer(image_layer),
+        channels(channels),
         last_idr_frame(-idr_throttle),
         shared_sender(async_send ? sender::get() : nullptr)
 {}

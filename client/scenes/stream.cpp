@@ -262,7 +262,6 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 		std::shared_lock lock(decoder_mutex);
 		std::unique_lock frame_lock(frames_mutex);
 		auto stream = handle->feedback.stream_index;
-		stream = (2 * stream % 128) + stream / 128;
 		if (stream < decoders.size())
 		{
 			assert(decoder == decoders[stream].decoder.get());
@@ -271,7 +270,7 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 		}
 
 		if (state_ != state::streaming and std::ranges::all_of(decoders, [](accumulator_images & i) {
-			    return i.alpha or not i.frames().empty();
+			    return i.alpha() or not i.frames().empty();
 		    }))
 		{
 			state_ = state::streaming;
@@ -283,6 +282,11 @@ void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_p
 	{
 		send_feedback(handle->feedback);
 	}
+}
+
+bool scenes::stream::accumulator_images::alpha() const
+{
+	return decoder->desc().channels == wivrn::to_headset::video_stream_description::channels_t::alpha;
 }
 
 std::vector<uint64_t> scenes::stream::accumulator_images::frames() const
@@ -306,7 +310,7 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 	const bool alpha = decoders[0].latest_frames[0] and decoders[0].latest_frames[0]->view_info.alpha;
 	for (size_t i = 0; i < decoders.size(); ++i)
 	{
-		if (decoders[i].alpha and not alpha)
+		if (decoders[i].alpha() and not alpha)
 			continue;
 		if (i == 0)
 		{
@@ -346,7 +350,7 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 		auto frame_index = (*min)->feedback.frame_index;
 		for (const auto & decoder: decoders)
 		{
-			if (alpha or not decoder.alpha)
+			if (alpha or not decoder.alpha())
 				result.emplace_back(decoder.frame(frame_index));
 			else
 				result.emplace_back(nullptr);
@@ -370,7 +374,7 @@ std::vector<std::shared_ptr<shard_accumulator::blit_handle>> scenes::stream::com
 
 		for (const auto & decoder: decoders)
 		{
-			if (alpha or not decoder.alpha)
+			if (alpha or not decoder.alpha())
 			{
 				auto min = std::ranges::min_element(decoder.latest_frames,
 				                                    std::ranges::less{},
@@ -490,7 +494,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 
 			std::array<VkBool32, 2> constants = {
 			        need_srgb_conversion(guess_model()),
-			        i.alpha,
+			        i.alpha(),
 			};
 			std::array frag_specialization_constant_desc = {
 			        vk::SpecializationMapEntry{
@@ -549,8 +553,8 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			                .rasterizationSamples = vk::SampleCountFlagBits::e1,
 			        }},
 			        .ColorBlendAttachments = {
-			                {.colorWriteMask = i.alpha ? vk::ColorComponentFlagBits::eA
-			                                           : vk::ColorComponentFlagBits::eA | vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB}},
+			                {.colorWriteMask = i.alpha() ? vk::ColorComponentFlagBits::eA
+			                                             : vk::ColorComponentFlagBits::eA | vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB}},
 			        .DynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor},
 			        .layout = *i.blit_pipeline_layout,
 			        .renderPass = *blit_render_pass,
@@ -688,7 +692,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		{
 			if (not *decoder.blit_pipeline)
 				continue;
-			if (decoder.alpha and not use_alpha)
+			if (decoder.alpha() and not use_alpha)
 				continue;
 
 			command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *decoder.blit_pipeline);
@@ -696,14 +700,14 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			const auto & description = decoder.decoder->desc();
 			int x0 = description.offset_x - x_offset;
 			int y0 = description.offset_y;
-			int x1 = x0 + description.width;
-			int y1 = y0 + description.height;
+			int x1 = x0 + description.width * description.subsampling;
+			int y1 = y0 + description.height * description.subsampling;
 
 			vk::Viewport viewport{
 			        .x = (float)x0,
 			        .y = (float)y0,
-			        .width = (float)description.width,
-			        .height = (float)description.height,
+			        .width = float(description.width * description.subsampling),
+			        .height = float(description.height * description.subsampling),
 			        .minDepth = 0,
 			        .maxDepth = 1,
 			};
@@ -998,29 +1002,24 @@ void scenes::stream::setup(const to_headset::video_stream_description & descript
 		        });
 	}
 
+	if (instance.has_extension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
+	{
+		try
+		{
+			session.set_refresh_rate(description.fps);
+		}
+		catch (std::exception & e)
+		{
+			spdlog::warn("Failed to set refresh rate to {}: {}", description.fps, e.what());
+		}
+	}
+
 	for (const auto & [stream_index, item]: utils::enumerate(description.items))
 	{
 		spdlog::info("Creating decoder size {}x{} offset {},{}", item.width, item.height, item.offset_x, item.offset_y);
 
-		if (instance.has_extension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
-		{
-			try
-			{
-				session.set_refresh_rate(description.fps);
-			}
-			catch (std::exception & e)
-			{
-				spdlog::warn("Failed to set refresh rate to {}: {}", description.fps, e.what());
-			}
-		}
-
 		decoders.push_back(accumulator_images{
 		        .decoder = std::make_unique<shard_accumulator>(device, physical_device, item, description.fps, shared_from_this(), stream_index),
-		        .alpha = false,
-		});
-		decoders.push_back(accumulator_images{
-		        .decoder = std::make_unique<shard_accumulator>(device, physical_device, item, description.fps, shared_from_this(), stream_index + 128),
-		        .alpha = true,
 		});
 	}
 }

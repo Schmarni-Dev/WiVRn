@@ -38,8 +38,8 @@ public:
 	};
 
 protected:
-	video_encoder_ffmpeg(uint8_t stream_idx, uint8_t image_layer) :
-	        wivrn::video_encoder(stream_idx, image_layer, true) {}
+	video_encoder_ffmpeg(uint8_t stream_idx, to_headset::video_stream_description::channels_t channels) :
+	        wivrn::video_encoder(stream_idx, channels, true) {}
 
 	virtual void push_frame(bool idr, std::chrono::steady_clock::time_point pts, uint8_t slot) = 0;
 

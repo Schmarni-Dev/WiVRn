@@ -138,9 +138,8 @@ video_encoder_nvenc::video_encoder_nvenc(
         wivrn_vk_bundle & vk,
         encoder_settings & settings,
         float fps,
-        uint8_t stream_idx,
-        uint8_t image_layer) :
-        video_encoder(stream_idx, image_layer, true),
+        uint8_t stream_idx) :
+        video_encoder(stream_idx, settings.channels, true),
         vk(vk),
         fps(fps),
         bitrate(settings.bitrate)
@@ -341,7 +340,7 @@ void video_encoder_nvenc::present_image(vk::Image y_cbcr, vk::raii::CommandBuffe
 	                .bufferRowLength = width,
 	                .imageSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane0,
-	                        .baseArrayLayer = image_layer,
+	                        .baseArrayLayer = uint32_t(channels),
 	                        .layerCount = 1,
 	                },
 	                .imageOffset = {
@@ -362,7 +361,7 @@ void video_encoder_nvenc::present_image(vk::Image y_cbcr, vk::raii::CommandBuffe
 	                .bufferRowLength = uint32_t(width / 2),
 	                .imageSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane1,
-	                        .baseArrayLayer = image_layer,
+	                        .baseArrayLayer = uint32_t(channels),
 	                        .layerCount = 1,
 	                },
 	                .imageOffset = {

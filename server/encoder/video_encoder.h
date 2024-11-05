@@ -71,9 +71,9 @@ private:
 		void wait_idle(video_encoder *);
 	};
 
-protected:
+public:
 	const uint8_t stream_idx;
-	const uint8_t image_layer;
+	const to_headset::video_stream_description::channels_t channels;
 	static const uint8_t num_slots = 2;
 
 private:
@@ -103,7 +103,6 @@ public:
 	        wivrn_vk_bundle &,
 	        encoder_settings & settings,
 	        uint8_t stream_idx,
-	        uint8_t image_layer,
 	        int input_width,
 	        int input_height,
 	        float fps);
@@ -112,7 +111,7 @@ public:
 	static std::pair<std::vector<vk::VideoProfileInfoKHR>, vk::ImageUsageFlags> get_create_image_info(const std::vector<encoder_settings> &);
 #endif
 
-	video_encoder(uint8_t stream_idx, uint8_t image_layer, bool async_send);
+	video_encoder(uint8_t stream_idx, to_headset::video_stream_description::channels_t channels, bool async_send);
 	virtual ~video_encoder();
 
 	void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf);

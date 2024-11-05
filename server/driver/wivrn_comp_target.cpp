@@ -161,15 +161,11 @@ static void create_encoders(wivrn_comp_target * cn)
 	for (auto & settings: cn->settings)
 	{
 		uint8_t stream_index = cn->encoders.size();
-		auto alpha_settings = settings;
-		alpha_settings.bitrate /= 10;
 		auto & encoder = cn->encoders.emplace_back(
-		        video_encoder::create(*cn->wivrn_bundle, settings, stream_index, 0, desc.width, desc.height, desc.fps),
-		        video_encoder::create(*cn->wivrn_bundle, alpha_settings, stream_index + 128, 1, desc.width, desc.height, desc.fps));
+		        video_encoder::create(*cn->wivrn_bundle, settings, stream_index, desc.width, desc.height, desc.fps));
 		desc.items.push_back(settings);
 
-		thread_params[settings.group].emplace_back(encoder.yuv);
-		thread_params[settings.group].emplace_back(encoder.alpha);
+		thread_params[settings.group].emplace_back(encoder);
 	}
 
 	for (auto & [group, params]: thread_params)
@@ -508,7 +504,8 @@ static void comp_wivrn_present_thread(std::stop_token stop_token, wivrn_comp_tar
 		{
 			for (auto & encoder: encoders)
 			{
-				encoder->Encode(cn->cnx, view_info, frame_index);
+				if (encoder->channels == to_headset::video_stream_description::channels_t::colour or view_info.alpha)
+					encoder->Encode(cn->cnx, view_info, frame_index);
 			}
 		}
 		catch (std::exception & e)
@@ -610,14 +607,12 @@ static VkResult comp_wivrn_present(struct comp_target * ct,
 
 	for (auto & encoder: cn->encoders)
 	{
+		if (encoder->channels == to_headset::video_stream_description::channels_t::alpha and not do_alpha)
+			continue;
 #if WIVRN_USE_VULKAN_ENCODE
-		encoder.yuv->present_image(psc_image.image, video_command_buffer, *cn->psc.images[index].video_fence, info.frame_id);
-		if (do_alpha)
-			encoder.alpha->present_image(psc_image.image, video_command_buffer, *cn->psc.images[index].video_fence, info.frame_id);
+		encoder->present_image(psc_image.image, video_command_buffer, *cn->psc.images[index].video_fence, info.frame_id);
 #endif
-		encoder.yuv->present_image(psc_image.image, command_buffer);
-		if (do_alpha)
-			encoder.alpha->present_image(psc_image.image, command_buffer);
+		encoder->present_image(psc_image.image, command_buffer);
 	}
 
 #if WIVRN_USE_VULKAN_ENCODE
@@ -796,28 +791,21 @@ void wivrn_comp_target::on_feedback(const from_headset::feedback & feedback, con
 {
 	if (not o)
 		return;
-	uint8_t stream = feedback.stream_index % 128;
+	uint8_t stream = feedback.stream_index;
 	if (psc.status & 1)
 		return;
 	if (encoders.size() <= stream)
 		return;
-	if (feedback.stream_index == stream)
-	{
-		encoders[stream].yuv->on_feedback(feedback);
+	encoders[stream]->on_feedback(feedback);
+	if (encoders[stream]->channels == to_headset::video_stream_description::channels_t::colour)
 		pacer.on_feedback(feedback, o);
-	}
-	else
-		encoders[stream].alpha->on_feedback(feedback);
 }
 
 void wivrn_comp_target::reset_encoders()
 {
 	pacer.reset();
 	for (auto & encoder: encoders)
-	{
-		encoder.yuv->reset();
-		encoder.alpha->reset();
-	}
+		encoder->reset();
 	cnx.send_control(desc);
 }
 

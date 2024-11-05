@@ -101,12 +101,7 @@ struct wivrn_comp_target : public comp_target
 	std::vector<encoder_settings> settings;
 	to_headset::video_stream_description desc{};
 	std::list<std::jthread> encoder_threads;
-	struct encoder_pair
-	{
-		std::shared_ptr<video_encoder> yuv;
-		std::shared_ptr<video_encoder> alpha;
-	};
-	std::vector<encoder_pair> encoders;
+	std::vector<std::shared_ptr<video_encoder>> encoders;
 
 	wivrn::wivrn_session & cnx;
 	std::unique_ptr<wivrn_foveation_renderer> foveation_renderer = nullptr;

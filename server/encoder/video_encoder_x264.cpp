@@ -89,9 +89,8 @@ video_encoder_x264::video_encoder_x264(
         wivrn_vk_bundle & vk,
         encoder_settings & settings,
         float fps,
-        uint8_t stream_idx,
-        uint8_t image_layer) :
-        video_encoder(stream_idx, image_layer, false)
+        uint8_t stream_idx) :
+        video_encoder(stream_idx, settings.channels, false)
 {
 	if (settings.codec != h264)
 	{
@@ -194,7 +193,7 @@ void video_encoder_x264::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer
 	                .bufferRowLength = chroma_width * 2,
 	                .imageSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane0,
-	                        .baseArrayLayer = image_layer,
+	                        .baseArrayLayer = uint32_t(channels),
 	                        .layerCount = 1,
 	                },
 	                .imageOffset = {
@@ -214,7 +213,7 @@ void video_encoder_x264::present_image(vk::Image y_cbcr, vk::raii::CommandBuffer
 	                .bufferRowLength = chroma_width,
 	                .imageSubresource = {
 	                        .aspectMask = vk::ImageAspectFlagBits::ePlane1,
-	                        .baseArrayLayer = image_layer,
+	                        .baseArrayLayer = uint32_t(channels),
 	                        .layerCount = 1,
 	                },
 	                .imageOffset = {

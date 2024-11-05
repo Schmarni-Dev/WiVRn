@@ -17,6 +17,7 @@
  */
 #include "video_encoder_vulkan.h"
 
+#include "encoder/encoder_settings.h"
 #include "util/u_logging.h"
 #include "utils/wivrn_vk_bundle.h"
 #include <iostream>
@@ -51,8 +52,14 @@ vk::VideoFormatPropertiesKHR wivrn::video_encoder_vulkan::select_video_format(
 	throw std::runtime_error("No suitable image format found");
 }
 
-wivrn::video_encoder_vulkan::video_encoder_vulkan(wivrn_vk_bundle & vk, vk::Rect2D rect, vk::VideoEncodeCapabilitiesKHR in_encode_caps, float fps, uint8_t stream_idx, uint8_t image_layer, uint64_t bitrate) :
-        video_encoder(stream_idx, image_layer, true), vk(vk), encode_caps(patch_capabilities(in_encode_caps)), rect(rect), fps(fps)
+wivrn::video_encoder_vulkan::video_encoder_vulkan(
+        wivrn_vk_bundle & vk,
+        vk::Rect2D rect,
+        vk::VideoEncodeCapabilitiesKHR in_encode_caps,
+        float fps,
+        uint8_t stream_idx,
+        const encoder_settings & settings) :
+        video_encoder(stream_idx, settings.channels, true), vk(vk), encode_caps(patch_capabilities(in_encode_caps)), rect(rect), fps(fps)
 {
 	// Initialize Rate control
 	U_LOG_D("Supported rate control modes: %s", vk::to_string(encode_caps.rateControlModes).c_str());
@@ -60,17 +67,17 @@ wivrn::video_encoder_vulkan::video_encoder_vulkan(wivrn_vk_bundle & vk, vk::Rect
 	if (encode_caps.rateControlModes & (vk::VideoEncodeRateControlModeFlagBitsKHR::eCbr | vk::VideoEncodeRateControlModeFlagBitsKHR::eVbr))
 	{
 		U_LOG_D("Maximum bitrate: %ld", encode_caps.maxBitrate / 1'000'000);
-		if (encode_caps.maxBitrate < bitrate)
+		if (encode_caps.maxBitrate < settings.bitrate)
 		{
 			U_LOG_W("Configured bitrate %ldMB/s is higher than max supported %ld",
-			        bitrate / 1'000'000,
+			        settings.bitrate / 1'000'000,
 			        encode_caps.maxBitrate / 1'000'000);
 		}
 	}
 
 	rate_control_layer = vk::VideoEncodeRateControlLayerInfoKHR{
-	        .averageBitrate = std::min(bitrate, encode_caps.maxBitrate),
-	        .maxBitrate = std::min(2 * bitrate, encode_caps.maxBitrate),
+	        .averageBitrate = std::min(settings.bitrate, encode_caps.maxBitrate),
+	        .maxBitrate = std::min(2 * settings.bitrate, encode_caps.maxBitrate),
 	        .frameRateNumerator = uint32_t(fps * 1'000'000),
 	        .frameRateDenominator = 1'000'000,
 	};
@@ -227,7 +234,7 @@ void wivrn::video_encoder_vulkan::init(const vk::VideoCapabilitiesKHR & video_ca
 	        .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
 	                             .baseMipLevel = 0,
 	                             .levelCount = 1,
-	                             .baseArrayLayer = image_layer,
+	                             .baseArrayLayer = uint32_t(channels),
 	                             .layerCount = 1},
 	};
 

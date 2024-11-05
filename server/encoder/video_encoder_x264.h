@@ -61,7 +61,7 @@ class video_encoder_x264 : public video_encoder
 	std::list<pending_nal> pending_nals;
 
 public:
-	video_encoder_x264(wivrn_vk_bundle & vk, encoder_settings & settings, float fps, uint8_t stream_idx, uint8_t image_layer);
+	video_encoder_x264(wivrn_vk_bundle & vk, encoder_settings & settings, float fps, uint8_t stream_idx);
 
 	void present_image(vk::Image y_cbcr, vk::raii::CommandBuffer & cmd_buf, uint8_t slot) override;
 

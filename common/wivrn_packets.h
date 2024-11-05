@@ -291,6 +291,11 @@ struct audio_stream_description
 
 struct video_stream_description
 {
+	enum class channels_t
+	{
+		colour,
+		alpha,
+	};
 	struct item
 	{
 		// useful dimensions of the video stream
@@ -302,6 +307,8 @@ struct video_stream_description
 		uint16_t offset_x;
 		uint16_t offset_y;
 		video_codec codec;
+		channels_t channels;
+		uint8_t subsampling; // applies to width/height only, offsets are in full size pixels
 		std::optional<VkSamplerYcbcrRange> range;
 		std::optional<VkSamplerYcbcrModelConversion> color_model;
 	};

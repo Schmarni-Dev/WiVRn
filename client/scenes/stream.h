@@ -60,9 +60,9 @@ private:
 		vk::raii::Pipeline blit_pipeline = nullptr;
 		// latest frames from oldest to most recent
 		std::array<std::shared_ptr<wivrn::shard_accumulator::blit_handle>, image_buffer_size> latest_frames;
-		bool alpha;
 
 		std::shared_ptr<wivrn::shard_accumulator::blit_handle> frame(uint64_t id) const;
+		bool alpha() const;
 		std::vector<uint64_t> frames() const;
 	};
 
