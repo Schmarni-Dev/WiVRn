@@ -69,6 +69,20 @@
 	<content_rating type="oars-1.1" />
 
 	<releases>
+		<release version="0.21" date="2024-11-03">
+			<url type="details">https://github.com/WiVRn/WiVRn/releases/tag/v0.21</url>
+			<description>
+				<ul>
+					<li>Fixed multiple dashboard issues</li>
+					<li>Improved compositor pacing</li>
+					<li>Changed default encoder configuration</li>
+					<li>Inhibit sleeping while a session is active</li>
+					<li>Avahi publication is now optional</li>
+					<li>Always set the active runtime even if there was already one</li>
+				</ul>
+			</description>
+		</release>
+
 		<release version="0.20" date="2024-10-14">
 			<url type="details">https://github.com/WiVRn/WiVRn/releases/tag/v0.20</url>
 			<description>

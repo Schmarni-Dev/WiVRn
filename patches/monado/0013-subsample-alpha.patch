@@ -1,0 +1,45 @@
+From 78172e87dfccc1a8f7a1599e9963c943d59ac784 Mon Sep 17 00:00:00 2001
+From: Patrick Nicolas <patricknicolas@laposte.net>
+Date: Tue, 5 Nov 2024 09:54:55 +0100
+Subject: [PATCH] subsample alpha
+
+---
+ src/xrt/compositor/shaders/distortion.comp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/compositor/shaders/distortion.comp b/src/xrt/compositor/shaders/distortion.comp
+index f166b80cc..237221a54 100644
+--- a/src/xrt/compositor/shaders/distortion.comp
++++ b/src/xrt/compositor/shaders/distortion.comp
+@@ -142,6 +142,7 @@ void main()
+ 	ivec2 offset = ivec2(ubo.views[iz].xy);
+ 	ivec2 extent = ivec2(ubo.views[iz].zw);
+ 	vec2 cbcrs[4];
++	vec4 alpha;
+ 	for (int k = 0; k < 2; k += 1) {
+ 		uint iy = gl_GlobalInvocationID.y * 2 + k;
+ 		for (int j = 0; j < 2; j += 1) {
+@@ -162,10 +163,10 @@ void main()
+ 
+ 			int i = k * 2 + j;
+ 			cbcrs[i] = colour.yz;
++			alpha[i] = colour.a;
+ 
+ 			if (ix < extent.x && iy < extent.y) {
+ 				imageStore(luma, ivec3(offset.x + ix, offset.y + iy, 0), vec4(colour.x));
+-				imageStore(luma, ivec3(offset.x + ix, offset.y + iy, 1), vec4(colour.a));
+ 			}
+ 		}
+ 	}
+@@ -174,5 +175,8 @@ void main()
+ 	}
+ 	vec2 cbcr = mix(mix(cbcrs[0], cbcrs[1], 0.5), mix(cbcrs[2], cbcrs[3], 0.5), 0.5);
+ 	imageStore(chroma, ivec3(offset.xy/2 + gl_GlobalInvocationID.xy, 0), vec4(cbcr.x, cbcr.y, 0, 0));
++
+ 	imageStore(chroma, ivec3(offset.xy/2 + gl_GlobalInvocationID.xy, 1), vec4(0.5, 0.5, 0, 0));
++	alpha = vec4(mix(mix(alpha[0], alpha[1], 0.5), mix(alpha[2], alpha[3], 0.5), 0.5));
++	imageStore(luma, ivec3(offset.xy/2 + gl_GlobalInvocationID.xy, 1), alpha);
+ }
+-- 
+2.47.0
+

@@ -6,7 +6,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0069 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Default to PIC code
@@ -80,6 +80,7 @@ elseif(WIVRN_USE_SYSTEM_BOOST STREQUAL "ON")
 endif()
 
 if (WIVRN_BUILD_SERVER)
+    find_program(GDBUS_CODEGEN gdbus-codegen REQUIRED)
     if (Vulkan_VERSION  VERSION_LESS "1.3.261")
         message(FATAL_ERROR "Vulkan version must be at least 1.3.261, found ${Vulkan_VERSION}")
     endif()
@@ -175,6 +176,10 @@ if (WIVRN_BUILD_DASHBOARD)
     set(CMAKE_AUTOMOC ON)
     set(CMAKE_AUTORCC ON)
     set(CMAKE_AUTOUIC ON)
+endif()
+
+if (WIVRN_BUILD_CLIENT OR WIVRN_BUILD_DASHBOARD)
+    find_program(RSVG_CONVERT rsvg-convert REQUIRED)
 endif()
 
 if (WIVRN_BUILD_CLIENT AND NOT ANDROID)
